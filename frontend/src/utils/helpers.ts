@@ -108,6 +108,13 @@ export const STATUS_MAP: Record<number, StatusMeta> = {
     borderColor: 'border-gray-300',
     description: 'Listing cancelled and escrow reclaimed',
   },
+  6: {
+    label: 'In Appeal Deliberation',
+    badgeBg: 'bg-purple-50',
+    textColor: 'text-purple-800',
+    borderColor: 'border-purple-300',
+    description: 'Appeal filed by participant; executive re-review convening',
+  },
 };
 
 export function getStatusMeta(status: number): StatusMeta {

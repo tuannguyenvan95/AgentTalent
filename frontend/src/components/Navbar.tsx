@@ -1,5 +1,17 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Wallet, Settings, Sparkles, AlertCircle, ArrowUpRight } from 'lucide-react';
+import {
+  ShieldCheck,
+  Wallet,
+  Settings,
+  Sparkles,
+  AlertCircle,
+  ArrowUpRight,
+  LogOut,
+  Copy,
+  Check,
+  User,
+  ChevronDown,
+} from 'lucide-react';
 import { shortenAddress } from '../utils/helpers';
 import { STUDIO_URL } from '../config/genlayer';
 
@@ -9,6 +21,7 @@ interface NavbarProps {
   isConnecting: boolean;
   contractAddress: string;
   onConnectWallet: () => void;
+  onDisconnectWallet: () => void;
   onPostJobClick: () => void;
   onUpdateContractAddress: (addr: string) => void;
 }
@@ -19,10 +32,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   isConnecting,
   contractAddress,
   onConnectWallet,
+  onDisconnectWallet,
   onPostJobClick,
   onUpdateContractAddress,
 }) => {
   const [showConfig, setShowConfig] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [customAddress, setCustomAddress] = useState(contractAddress);
 
   const handleSaveContract = (e: React.FormEvent) => {
@@ -30,6 +46,14 @@ export const Navbar: React.FC<NavbarProps> = ({
     if (customAddress.trim().startsWith('0x')) {
       onUpdateContractAddress(customAddress.trim());
       setShowConfig(false);
+    }
+  };
+
+  const handleCopy = () => {
+    if (account) {
+      navigator.clipboard.writeText(account);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -79,7 +103,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Action CTAs & Wallet */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3 relative">
             <button
               onClick={onPostJobClick}
               className="hidden sm:inline-flex items-center space-x-2 px-4 py-2.5 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold tracking-wide transition shadow-sm border border-sapphire-light"
@@ -89,14 +113,88 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
 
             {account ? (
-              <div className="flex items-center space-x-2 p-1.5 pl-3 rounded-lg bg-canvas border border-borderline text-xs">
-                <div className="flex flex-col text-right">
-                  <span className="font-mono font-semibold text-sapphire">{balance} GEN</span>
-                  <span className="font-mono text-[10px] text-sapphire/60">{shortenAddress(account, 3)}</span>
-                </div>
-                <div className="w-8 h-8 rounded-md bg-sapphire/10 flex items-center justify-center text-sapphire">
-                  <ShieldCheck className="w-4 h-4 text-sapphire" />
-                </div>
+              <div className="relative">
+                <button
+                  onClick={() => setShowProfileMenu(!showProfileMenu)}
+                  className="flex items-center space-x-2 p-1.5 pl-3 rounded-lg bg-canvas border border-borderline hover:border-champagne text-xs transition group cursor-pointer"
+                >
+                  <div className="flex flex-col text-right">
+                    <span className="font-mono font-semibold text-sapphire">{balance} GEN</span>
+                    <span className="font-mono text-[10px] text-sapphire/60">{shortenAddress(account, 3)}</span>
+                  </div>
+                  <div className="w-8 h-8 rounded-md bg-sapphire/10 group-hover:bg-sapphire/20 flex items-center justify-center text-sapphire transition">
+                    <ShieldCheck className="w-4 h-4 text-sapphire" />
+                  </div>
+                  <ChevronDown className="w-3.5 h-3.5 text-sapphire/50 group-hover:text-sapphire transition" />
+                </button>
+
+                {/* Profile & Disconnect Dropdown Menu */}
+                {showProfileMenu && (
+                  <div className="absolute right-0 mt-2 w-72 bg-surface rounded-xl border border-borderline shadow-executive-hover py-3 px-4 z-50 animate-slide-up">
+                    <div className="flex items-center justify-between pb-3 border-b border-borderline/60">
+                      <div className="flex items-center space-x-2">
+                        <div className="w-8 h-8 rounded-full bg-sapphire/10 flex items-center justify-center text-sapphire font-semibold text-xs">
+                          <User className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="block text-xs font-bold text-sapphire">Active Profile</span>
+                          <span className="block text-[10px] text-emerald-600 font-medium flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            Connected to Studionet
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="py-3 space-y-2 text-xs">
+                      <div>
+                        <span className="text-[10px] uppercase font-semibold text-sapphire/50 tracking-wider">
+                          Wallet Address
+                        </span>
+                        <div className="flex items-center justify-between mt-1 p-2 rounded-lg bg-canvas border border-borderline">
+                          <span className="font-mono text-[11px] text-sapphire truncate mr-2">
+                            {account}
+                          </span>
+                          <button
+                            onClick={handleCopy}
+                            className="p-1 rounded hover:bg-white text-sapphire/70 transition shrink-0"
+                            title="Copy address"
+                          >
+                            {copied ? <Check className="w-3.5 h-3.5 text-sage" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-sapphire/60">Current Balance:</span>
+                        <span className="font-mono font-bold text-sapphire">{balance} GEN</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-borderline/60 space-y-1">
+                      <a
+                        href={`https://genlayer-explorer.vercel.app/address/${account}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-sapphire/80 hover:bg-canvas transition"
+                      >
+                        <span>View on GenLayer Explorer</span>
+                        <ArrowUpRight className="w-3.5 h-3.5 text-sapphire/50" />
+                      </a>
+
+                      <button
+                        onClick={() => {
+                          setShowProfileMenu(false);
+                          onDisconnectWallet();
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold text-bordeaux hover:bg-bordeaux-soft transition"
+                      >
+                        <span>Disconnect Wallet</span>
+                        <LogOut className="w-3.5 h-3.5 text-bordeaux" />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <button

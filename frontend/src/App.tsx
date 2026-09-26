@@ -16,6 +16,7 @@ import {
   submitInterviewResponseOnChain,
   adjudicateInterviewOnChain,
   cancelOrReclaimOnChain,
+  requestAppealOnChain,
   JobBountyData,
   ProtocolStats,
 } from './config/genlayer';
@@ -26,6 +27,9 @@ import {
   Layers,
   AlertCircle,
   CheckCircle,
+  Briefcase,
+  Bot,
+  Scale,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -86,6 +90,13 @@ export const App: React.FC = () => {
     } finally {
       setIsConnecting(false);
     }
+  };
+
+  // Disconnect Wallet Action
+  const handleDisconnectWallet = () => {
+    setAccount('');
+    setBalance('0.00');
+    showToast('Wallet disconnected.', 'info');
   };
 
   // Fetch contract jobs and aggregated stats directly from Studionet
@@ -183,6 +194,27 @@ export const App: React.FC = () => {
     }
   };
 
+  // File Appeal Action (Protecting Both Sides)
+  const handleRequestAppeal = async (jobId: string, rationale: string) => {
+    if (!account) {
+      await handleConnectWallet();
+      return;
+    }
+    try {
+      setIsProcessingTx(true);
+      showToast(`Filing formal on-chain appeal for ${jobId}...`, 'info');
+      await requestAppealOnChain(contractAddress, account, jobId, rationale);
+      showToast('Formal appeal recorded! Executive Board will re-evaluate with dispute context.', 'success');
+      await loadProtocolData();
+    } catch (err: any) {
+      console.error('Failed to file appeal:', err);
+      showToast(err?.message || 'Failed to file appeal.', 'error');
+      throw err;
+    } finally {
+      setIsProcessingTx(false);
+    }
+  };
+
   // Reclaim Escrow Action
   const handleReclaimEscrow = async (jobId: string) => {
     if (!account) {
@@ -239,7 +271,7 @@ export const App: React.FC = () => {
     }
   }, [loadProtocolData]);
 
-  // Filtering
+  // Filtering Logic
   const filteredJobs = jobs.filter((job) => {
     const matchesSearch =
       job.job_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -249,15 +281,22 @@ export const App: React.FC = () => {
     if (!matchesSearch) return false;
 
     if (filterStatus === 'ALL') return true;
+    if (filterStatus === 'MY_POSTED') {
+      return account && job.employer.toLowerCase() === account.toLowerCase();
+    }
+    if (filterStatus === 'MY_APPLIED') {
+      return account && job.candidate_agent.toLowerCase() === account.toLowerCase();
+    }
     if (filterStatus === 'OPEN') return job.status === 0;
     if (filterStatus === 'IN_INTERVIEW') return job.status === 1;
+    if (filterStatus === 'IN_APPEAL') return job.status === 6;
     if (filterStatus === 'HIRED') return job.status === 2;
     if (filterStatus === 'SHORTLISTED') return job.status === 4;
     if (filterStatus === 'REJECTED') return job.status === 3;
     return true;
   });
 
-  const activeJobCount = jobs.filter((j) => j.status === 0 || j.status === 1).length;
+  const activeJobCount = jobs.filter((j) => j.status === 0 || j.status === 1 || j.status === 6).length;
 
   return (
     <div className="min-h-screen bg-canvas text-sapphire flex flex-col font-sans selection:bg-champagne/20">
@@ -288,6 +327,7 @@ export const App: React.FC = () => {
         isConnecting={isConnecting}
         contractAddress={contractAddress}
         onConnectWallet={handleConnectWallet}
+        onDisconnectWallet={handleDisconnectWallet}
         onPostJobClick={() => setIsPostModalOpen(true)}
         onUpdateContractAddress={handleUpdateContractAddress}
       />
@@ -302,7 +342,7 @@ export const App: React.FC = () => {
           <div className="relative z-10 max-w-3xl space-y-4">
             <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur border border-champagne/30 text-champagne text-[11px] font-semibold tracking-wider uppercase">
               <Sparkles className="w-3.5 h-3.5 text-champagne" />
-              <span>Future of Autonomous Agent Work</span>
+              <span>Future of Autonomous Agent Work • GenLayer Studionet</span>
             </div>
 
             <h1 className="text-3xl sm:text-4xl font-bold font-serif-title tracking-tight text-white leading-tight">
@@ -310,7 +350,7 @@ export const App: React.FC = () => {
             </h1>
 
             <p className="text-sm sm:text-base text-white/80 leading-relaxed font-sans">
-              Hire high-performance AI agents without fraud risk. Employers lock GEN bounty bounties; candidate agents submit live system designs; and GenLayer's on-chain Executive AI Jury scrapes, reads, and audits candidate reasoning through subjective consensus.
+              Hire high-performance AI agents without fraud risk. Employers lock GEN bounty escrows; candidate agents submit live system designs; and GenLayer's on-chain Executive AI Jury audits candidate reasoning through subjective consensus with formal dispute protection.
             </p>
 
             <div className="pt-2 flex flex-wrap items-center gap-3">
@@ -337,6 +377,56 @@ export const App: React.FC = () => {
 
         {/* Aggregated Protocol Metrics */}
         <StatsBar stats={stats} activeCount={activeJobCount} />
+
+        {/* Role-Based Quick Filter Bar */}
+        <div className="mb-6 p-3 rounded-xl bg-surface border border-borderline shadow-sm flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center space-x-2">
+            <span className="font-semibold text-sapphire text-[11px] uppercase tracking-wider">
+              Role Views:
+            </span>
+            <button
+              onClick={() => setFilterStatus('ALL')}
+              className={`px-3 py-1.5 rounded-lg transition font-medium ${
+                filterStatus === 'ALL'
+                  ? 'bg-sapphire text-white shadow-sm'
+                  : 'bg-canvas hover:bg-canvas-warm text-sapphire/80'
+              }`}
+            >
+              All Roles ({jobs.length})
+            </button>
+            {account && (
+              <>
+                <button
+                  onClick={() => setFilterStatus('MY_POSTED')}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${
+                    filterStatus === 'MY_POSTED'
+                      ? 'bg-sapphire text-white shadow-sm'
+                      : 'bg-canvas hover:bg-canvas-warm text-sapphire/80'
+                  }`}
+                >
+                  <Briefcase className="w-3.5 h-3.5" />
+                  <span>My Posted Bounties ({jobs.filter((j) => j.employer.toLowerCase() === account.toLowerCase()).length})</span>
+                </button>
+                <button
+                  onClick={() => setFilterStatus('MY_APPLIED')}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${
+                    filterStatus === 'MY_APPLIED'
+                      ? 'bg-sapphire text-white shadow-sm'
+                      : 'bg-canvas hover:bg-canvas-warm text-sapphire/80'
+                  }`}
+                >
+                  <Bot className="w-3.5 h-3.5" />
+                  <span>My Applications ({jobs.filter((j) => j.candidate_agent.toLowerCase() === account.toLowerCase()).length})</span>
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-2 text-[11px] text-sapphire/60">
+            <Scale className="w-3.5 h-3.5 text-champagne-dark" />
+            <span>Subjective Consensus • 1-Appeal Dispute Protection</span>
+          </div>
+        </div>
 
         {/* Listings Registry Section */}
         <section id="listings-section" className="space-y-6">
@@ -366,7 +456,7 @@ export const App: React.FC = () => {
 
               {/* Status Filter Tabs */}
               <div className="flex items-center p-1 rounded-lg bg-canvas-warm border border-borderline text-[11px] font-medium text-sapphire/70 overflow-x-auto">
-                {['ALL', 'OPEN', 'IN_INTERVIEW', 'HIRED', 'SHORTLISTED', 'REJECTED'].map((st) => (
+                {['ALL', 'OPEN', 'IN_INTERVIEW', 'IN_APPEAL', 'HIRED', 'SHORTLISTED', 'REJECTED'].map((st) => (
                   <button
                     key={st}
                     onClick={() => setFilterStatus(st)}
@@ -380,6 +470,8 @@ export const App: React.FC = () => {
                       ? 'All'
                       : st === 'IN_INTERVIEW'
                       ? 'In Review'
+                      : st === 'IN_APPEAL'
+                      ? 'In Appeal'
                       : st.charAt(0) + st.slice(1).toLowerCase()}
                   </button>
                 ))}
@@ -499,7 +591,9 @@ export const App: React.FC = () => {
         isOpen={!!selectedJobForInspection}
         onClose={() => setSelectedJobForInspection(null)}
         onAdjudicate={handleAdjudicateInterview}
+        onRequestAppeal={handleRequestAppeal}
         isAdjudicating={isProcessingTx}
+        currentUserAddress={account}
       />
     </div>
   );

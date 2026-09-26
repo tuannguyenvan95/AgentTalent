@@ -13,6 +13,7 @@ def test_contract_syntax_and_structure(contract_source):
     assert "def post_job_bounty(" in contract_source
     assert "def submit_interview_response(" in contract_source
     assert "def adjudicate_interview(" in contract_source
+    assert "def request_appeal(" in contract_source
     assert "def cancel_or_reclaim(" in contract_source
     assert "def get_job(" in contract_source
     assert "def get_job_count(" in contract_source
@@ -161,6 +162,24 @@ class MockAgentTalentSimulator:
             j["status"] = 3  # REJECTED_REFUNDED
             self.balances[j["employer"]] += escrow
 
+    def request_appeal(self, sender: str, job_id: str, appeal_rationale: str) -> None:
+        if job_id not in self.jobs:
+            raise KeyError(f"Job {job_id} does not exist.")
+        j = self.jobs[job_id]
+        if sender != j["employer"] and sender != j["candidate_agent"]:
+            raise PermissionError("Only the employer or candidate agent can file an appeal.")
+        if j.get("appeal_count", 0) >= 1:
+            raise ValueError("This case has already utilized its single allowable appeal.")
+        if j["status"] not in (2, 3, 4):
+            raise ValueError("Can only file an appeal on completed interview adjudications.")
+        clean_appeal = str(appeal_rationale).strip()
+        if len(clean_appeal) < 15:
+            raise ValueError("Appeal rationale must be at least 15 characters.")
+        j["appeal_count"] = j.get("appeal_count", 0) + 1
+        j["status"] = 6  # IN_APPEAL
+        j["appeal_reason"] = clean_appeal
+        j["reason"] = f"[APPEAL FILED by {sender}]: {clean_appeal} | Previous: " + j["reason"]
+
     def cancel_or_reclaim(self, sender: str, job_id: str, current_block: int) -> None:
         if job_id not in self.jobs:
             raise KeyError(f"Job {job_id} does not exist.")
@@ -186,6 +205,42 @@ class MockAgentTalentSimulator:
 
 
 # --- Integration Test Scenarios ---
+
+def test_appeal_and_dispute_protection():
+    """Verify appeal mechanism protects both parties and prevents unauthorized tampering."""
+    sim = MockAgentTalentSimulator()
+    job_id = sim.post_job_bounty(
+        sender="employer",
+        value=300,
+        job_description="Architect formal verification pipeline for cross-chain liquidity."
+    )
+    sim.submit_interview_response(sender="candidate", job_id=job_id, interview_response_url="https://agent.ai/sol")
+
+    # Initial adjudication rejects candidate
+    sim.adjudicate_interview(job_id=job_id, verdict="CANDIDATE_REJECTED", reason="Borderline", confidence=70, competency_score=50)
+    assert sim.jobs[job_id]["status"] == 3
+
+    # Third party cannot appeal
+    with pytest.raises(PermissionError):
+        sim.request_appeal(sender="third_party", job_id=job_id, appeal_rationale="Unjust verdict.")
+
+    # Short rationale fails
+    with pytest.raises(ValueError, match="at least 15 characters"):
+        sim.request_appeal(sender="candidate", job_id=job_id, appeal_rationale="Too short")
+
+    # Candidate files legitimate appeal
+    sim.request_appeal(
+        sender="candidate",
+        job_id=job_id,
+        appeal_rationale="Please re-evaluate section 4: invariant tests prove reentrancy safety."
+    )
+    assert sim.jobs[job_id]["status"] == 6  # IN_APPEAL
+    assert sim.jobs[job_id]["appeal_count"] == 1
+
+    # Second appeal blocked (no griefing)
+    with pytest.raises(ValueError, match="already utilized its single allowable appeal"):
+        sim.request_appeal(sender="candidate", job_id=job_id, appeal_rationale="Second appeal attempt should fail.")
+
 
 def test_post_job_validation_rules():
     """Verify escrow > 0 and description minimum length rules."""

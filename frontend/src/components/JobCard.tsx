@@ -1,4 +1,4 @@
-import { Sparkles, ChevronRight, ExternalLink, Cpu, RotateCcw } from 'lucide-react';
+import { Sparkles, ChevronRight, ExternalLink, Cpu, RotateCcw, AlertTriangle } from 'lucide-react';
 import { JobBountyData } from '../config/genlayer';
 import { formatGen, shortenAddress, getStatusMeta, getCompetencyLevel } from '../utils/helpers';
 
@@ -32,7 +32,7 @@ export const JobCard: React.FC<JobCardProps> = ({
     currentUserAddress.toLowerCase() === job.candidate_agent.toLowerCase();
 
   return (
-    <div className="bg-surface rounded-xl border border-borderline shadow-executive hover:shadow-executive-hover hover:border-champagne/60 transition-all duration-300 flex flex-col justify-between overflow-hidden group">
+    <div className="bg-surface rounded-xl border border-borderline shadow-executive hover:shadow-executive-hover hover:border-champagne transition-all duration-300 flex flex-col justify-between overflow-hidden group">
       {/* Top Banner / Card Header */}
       <div className="p-5 border-b border-borderline/60">
         <div className="flex items-start justify-between gap-3 mb-3">
@@ -54,6 +54,22 @@ export const JobCard: React.FC<JobCardProps> = ({
             <span className="text-xs font-bold text-champagne-dark">GEN</span>
           </div>
         </div>
+
+        {/* Role Badges */}
+        {(isEmployer || isCandidate) && (
+          <div className="mb-2 flex items-center space-x-2">
+            {isEmployer && (
+              <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded bg-champagne-soft text-champagne-dark border border-champagne/40">
+                Your Job (Employer)
+              </span>
+            )}
+            {isCandidate && (
+              <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded bg-sage-soft text-sage border border-sage/40">
+                Your Application (Candidate)
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Job Description Excerpt */}
         <p className="text-xs text-sapphire/80 line-clamp-3 leading-relaxed font-sans mb-3">
@@ -82,7 +98,7 @@ export const JobCard: React.FC<JobCardProps> = ({
       </div>
 
       {/* Evaluation Results (if adjudicated or submitted) */}
-      {job.status > 1 ? (
+      {job.status > 1 && job.status !== 6 ? (
         <div className="px-5 py-3 bg-canvas border-b border-borderline/60 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className={`text-base font-bold font-display-luxury ${competency.color}`}>
@@ -123,6 +139,19 @@ export const JobCard: React.FC<JobCardProps> = ({
             </a>
           )}
         </div>
+      ) : job.status === 6 ? (
+        <div className="px-5 py-3 bg-purple-50/80 border-b border-purple-200 flex items-center justify-between text-xs text-purple-900">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-purple-700 animate-bounce" />
+            <span className="font-semibold text-[11px]">Appeal Filed • Re-Review Convening</span>
+          </div>
+          <button
+            onClick={() => onInspectClick(job)}
+            className="text-[11px] font-semibold text-purple-800 hover:underline"
+          >
+            View Appeal
+          </button>
+        </div>
       ) : null}
 
       {/* Card Actions */}
@@ -154,7 +183,7 @@ export const JobCard: React.FC<JobCardProps> = ({
                   disabled={isProcessing}
                   className="px-4 py-1.5 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
                 >
-                  <Sparkles className="w-3 h-3 text-champagne" />
+                  <Sparkles className="w-3.5 h-3.5 text-champagne" />
                   <span>Submit Solution</span>
                 </button>
               )}
@@ -168,13 +197,25 @@ export const JobCard: React.FC<JobCardProps> = ({
               disabled={isProcessing}
               className="px-4 py-1.5 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
             >
-              <Cpu className="w-3 h-3 text-champagne" />
+              <Cpu className="w-3.5 h-3.5 text-champagne" />
               <span>Adjudicate</span>
             </button>
           )}
 
-          {/* Status >= 2: Already adjudicated */}
-          {job.status >= 2 && (
+          {/* Status 6: In Appeal -> Re-Adjudicate */}
+          {job.status === 6 && (
+            <button
+              onClick={() => onAdjudicateClick(job.job_id)}
+              disabled={isProcessing}
+              className="px-4 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
+            >
+              <Cpu className="w-3.5 h-3.5 text-champagne" />
+              <span>Re-Adjudicate</span>
+            </button>
+          )}
+
+          {/* Status >= 2: Settled */}
+          {job.status >= 2 && job.status !== 6 && (
             <button
               onClick={() => onInspectClick(job)}
               className="px-3.5 py-1.5 rounded-lg bg-canvas border border-borderline text-sapphire text-xs font-semibold hover:border-champagne transition"

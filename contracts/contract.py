@@ -25,14 +25,16 @@ class JobBounty:
     bounty_amount: bigint
     job_description: str          # Job role, domain requirements, interview case study
     interview_response_url: str   # Live URL of candidate's detailed solution / interview logs
-    status: u8                     # 0: OPEN, 1: IN_INTERVIEW, 2: HIRED_PAID, 3: REJECTED_REFUNDED, 4: SHORTLISTED_PARTIAL, 5: CANCELLED
-    verdict: str                   # "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED"
+    status: u8                     # 0: OPEN, 1: IN_INTERVIEW, 2: HIRED_PAID, 3: REJECTED_REFUNDED, 4: SHORTLISTED_PARTIAL, 5: CANCELLED, 6: IN_APPEAL
+    verdict: str                   # "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED", "CANCELLED"
     reason: str                    # Detailed interview panel rationale
     confidence: u8                 # 0 - 100: Validator consensus confidence
     competency_score: u8           # 0 - 100: Technical & strategic competency assessment
     created_at_block: u256
     expires_at_block: u256
     interview_started_block: u256
+    appeal_reason: str = ""        # Rationale provided by Employer or Candidate during dispute
+    appeal_count: u8 = u8(0)       # Number of appeals filed (maximum 1 to prevent griefing)
 
 
 class Contract(gl.Contract):
@@ -88,6 +90,8 @@ class Contract(gl.Contract):
             created_at_block=current_block,
             expires_at_block=expires_at,
             interview_started_block=u256(0),
+            appeal_reason="",
+            appeal_count=u8(0),
         )
 
         self.jobs[job_id] = new_job
@@ -133,11 +137,13 @@ class Contract(gl.Contract):
             raise gl.UserError(f"Job {job_id} does not exist.")
 
         j = self.jobs[job_id]
-        if j.status != u8(1):
-            raise gl.UserError(f"Job {job_id} is not awaiting interview adjudication.")
+        if j.status != u8(1) and j.status != u8(6):
+            raise gl.UserError(f"Job {job_id} is not awaiting interview adjudication or appeal.")
 
         response_url = j.interview_response_url
         job_reqs = j.job_description
+        is_appeal = (j.status == u8(6))
+        appeal_note = j.appeal_reason if is_appeal else ""
 
         def leader_fn():
             raw_solution = ""
@@ -172,10 +178,14 @@ CANDIDATE INTERVIEW SUBMISSION:
 {truncated_solution}
 </interview_solution>
 
+APPEAL CONTEXT (IF APPLICABLE):
+{appeal_note}
+
 EVALUATION RUBRIC:
-1. Technical & Strategic Competency: Did the candidate answer the specific case study with concrete, feasible, high-caliber solutions?
-2. Reasoning & Depth: Filter out generic buzzwords, hollow template replies, or superficial summaries.
-3. Scoring & Verdict:
+1. Technical & Strategic Competency (40%): Did the candidate solve the case study with concrete, feasible, high-caliber code/architecture?
+2. Reasoning & Depth (30%): Filter out hollow template replies, buzzwords, or superficial marketing summaries.
+3. System Safety & Invariant Checks (30%): Are edge cases, reentrancy, or failure modes systematically handled?
+4. Scoring & Verdict:
    - "CANDIDATE_HIRED" (competency_score >= 80): Outstanding mastery, directly hires the candidate (100% bounty payout).
    - "CANDIDATE_SHORTLISTED" (competency_score 55-79): Promising solution with minor gaps (50% stipend to candidate, 50% refund to employer).
    - "CANDIDATE_REJECTED" (competency_score < 55): Unqualified, off-topic, or generic AI spam (100% refund to employer).
@@ -292,6 +302,39 @@ Respond ONLY with valid JSON without markdown fences:
             gl.get_contract_at(j.employer).emit_transfer(value=u256(escrow_val))
 
     @gl.public.write
+    def request_appeal(self, job_id: str, appeal_rationale: str) -> None:
+        """
+        Dispute Mechanism: Either Employer or Candidate can trigger an on-chain Appeal
+        if they believe the evaluation had an unfair judgment or missed technical nuances.
+        Protected to 1 appeal per job to prevent endless loops.
+        """
+        if job_id not in self.jobs:
+            raise gl.UserError(f"Job {job_id} does not exist.")
+
+        j = self.jobs[job_id]
+        sender = gl.message.sender_address
+
+        # Only participants can appeal
+        if sender != j.employer and sender != j.candidate_agent:
+            raise gl.UserError("Only the employer or candidate agent can file an appeal.")
+
+        if j.appeal_count >= u8(1):
+            raise gl.UserError("This case has already utilized its single allowable appeal.")
+
+        # Can only appeal once settled
+        if j.status not in (u8(2), u8(3), u8(4)):
+            raise gl.UserError("Can only file an appeal on completed interview adjudications.")
+
+        clean_appeal = str(appeal_rationale).strip()
+        if len(clean_appeal) < 15:
+            raise gl.UserError("Appeal rationale must be at least 15 characters explaining the dispute.")
+
+        j.appeal_count = j.appeal_count + u8(1)
+        j.status = u8(6)  # IN_APPEAL
+        j.appeal_reason = clean_appeal
+        j.reason = f"[APPEAL FILED by {_addr_str(sender)[:10]}]: {clean_appeal} | Previous: " + j.reason
+
+    @gl.public.write
     def cancel_or_reclaim(self, job_id: str) -> None:
         """
         Employer can cancel an unapplied job after expiration, or if interview evaluation stalled.
@@ -348,6 +391,8 @@ Respond ONLY with valid JSON without markdown fences:
             "created_at_block": str(j.created_at_block),
             "expires_at_block": str(j.expires_at_block),
             "interview_started_block": str(j.interview_started_block),
+            "appeal_reason": j.appeal_reason,
+            "appeal_count": int(j.appeal_count),
         }
         return json.dumps(data)
 
@@ -387,6 +432,8 @@ Respond ONLY with valid JSON without markdown fences:
                 "created_at_block": str(j.created_at_block),
                 "expires_at_block": str(j.expires_at_block),
                 "interview_started_block": str(j.interview_started_block),
+                "appeal_reason": j.appeal_reason,
+                "appeal_count": int(j.appeal_count),
             })
         return json.dumps(jobs_list)
 
@@ -412,6 +459,8 @@ Respond ONLY with valid JSON without markdown fences:
                     "created_at_block": str(j.created_at_block),
                     "expires_at_block": str(j.expires_at_block),
                     "interview_started_block": str(j.interview_started_block),
+                    "appeal_reason": j.appeal_reason,
+                    "appeal_count": int(j.appeal_count),
                 })
         return json.dumps(jobs_list)
 

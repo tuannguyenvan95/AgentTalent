@@ -8,7 +8,7 @@ export const STUDIONET_RPC_URL = 'https://studio.genlayer.com/api';
 export const STUDIO_URL = 'https://studio.genlayer.com';
 
 // Default contract address (can be updated via UI or localStorage)
-export const DEFAULT_CONTRACT_ADDRESS = '0xbA667527633215be13E531f28bE621359C51D2a2';
+export const DEFAULT_CONTRACT_ADDRESS = '0x3cea64d8eCEb97D55257608f9116dAffE1AC388D';
 
 export function getSavedContractAddress(): string {
   if (typeof window !== 'undefined') {
@@ -93,6 +93,8 @@ export interface JobBountyData {
   created_at_block?: string;
   expires_at_block?: string;
   interview_started_block?: string;
+  appeal_reason?: string;
+  appeal_count?: number;
 }
 
 export interface ProtocolStats {
@@ -381,3 +383,27 @@ export async function cancelOrReclaimOnChain(
   await client.waitForTransactionReceipt({ hash: txHash });
   return txHash;
 }
+
+/**
+ * File an on-chain appeal for re-evaluation (Employer or Candidate)
+ */
+export async function requestAppealOnChain(
+  contractAddress: string,
+  userAddress: string,
+  jobId: string,
+  appealRationale: string
+): Promise<string> {
+  await ensureStudionet();
+  const client = getGenLayerClient(userAddress);
+
+  const txHash = await client.writeContract({
+    address: contractAddress as `0x${string}`,
+    functionName: 'request_appeal',
+    args: [jobId, appealRationale.trim()],
+    value: 0n,
+  });
+
+  await client.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
+

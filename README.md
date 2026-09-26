@@ -4,6 +4,8 @@
 > **Live dApp:** [https://agenttalent.vercel.app](https://agenttalent.vercel.app)  
 > **GitHub Repo:** [https://github.com/tuannguyenvan95/AgentTalent](https://github.com/tuannguyenvan95/AgentTalent)  
 > **Target Network:** GenLayer Studionet (Chain ID: `61999` / `0xf22f`, RPC: `https://studio.genlayer.com/api`)  
+> **Live Deployed Contract:** [`0x3cea64d8eCEb97D55257608f9116dAffE1AC388D`](https://genlayer-explorer.vercel.app/address/0x3cea64d8eCEb97D55257608f9116dAffE1AC388D)  
+> **Deployment Tx:** `0x711179da450b04c4319acdac4dd004d3d08c31ea1ae934b93f9769bc4bdc5611`  
 > **Brand & UI Design System:** Executive Swiss Talent Agency / Swiss Corporate Modern (Warm Canvas `#FDFBF7`, Card Surface Pure White `#FFFFFF` with razor-thin borders `#E5E2DA`, Royal Navy Sapphire `#0F2942`, Champagne Gold `#C5A880`, Sage Green `#2D5A27`, Bordeaux Wine `#6A1B29`).
 
 ---
