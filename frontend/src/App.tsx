@@ -16,7 +16,9 @@ import {
   submitInterviewResponseOnChain,
   adjudicateInterviewOnChain,
   cancelOrReclaimOnChain,
-  requestAppealOnChain,
+  appealVerdictOnChain,
+  adjudicateAppealOnChain,
+  finalizeSettlementOnChain,
   JobBountyData,
   ProtocolStats,
 } from './config/genlayer';
@@ -194,22 +196,74 @@ export const App: React.FC = () => {
     }
   };
 
-  // File Appeal Action (Protecting Both Sides)
-  const handleRequestAppeal = async (jobId: string, rationale: string) => {
+  // Appeal Verdict Action (10% dispute bond staked by appellant)
+  const handleAppealVerdict = async (jobId: string, newEvidenceUrl: string, bondWei: bigint) => {
     if (!account) {
       await handleConnectWallet();
       return;
     }
     try {
       setIsProcessingTx(true);
-      showToast(`Filing formal on-chain appeal for ${jobId}...`, 'info');
-      await requestAppealOnChain(contractAddress, account, jobId, rationale);
-      showToast('Formal appeal recorded! Executive Board will re-evaluate with dispute context.', 'success');
+      showToast(`Staking 10% appeal bond & filing dispute for ${jobId}...`, 'info');
+      await appealVerdictOnChain(contractAddress, account, jobId, newEvidenceUrl, bondWei);
+      showToast('Formal dispute filed with 10% bond! Senior Executive Board convened.', 'success');
       await loadProtocolData();
+      if (account) {
+        const bal = await fetchStudionetBalance(account);
+        setBalance(bal);
+      }
     } catch (err: any) {
-      console.error('Failed to file appeal:', err);
-      showToast(err?.message || 'Failed to file appeal.', 'error');
+      console.error('Failed to appeal verdict:', err);
+      showToast(err?.message || 'Failed to appeal verdict.', 'error');
       throw err;
+    } finally {
+      setIsProcessingTx(false);
+    }
+  };
+
+  // Senior Executive Board Re-Adjudicates Appeal
+  const handleAdjudicateAppeal = async (jobId: string) => {
+    if (!account) {
+      await handleConnectWallet();
+      return;
+    }
+    try {
+      setIsProcessingTx(true);
+      showToast(`Senior Executive AI Appeals Board deliberating on ${jobId}...`, 'info');
+      await adjudicateAppealOnChain(contractAddress, account, jobId);
+      showToast('Appellate decision rendered! Escrow and bond settled on-chain.', 'success');
+      await loadProtocolData();
+      if (account) {
+        const bal = await fetchStudionetBalance(account);
+        setBalance(bal);
+      }
+    } catch (err: any) {
+      console.error('Failed to adjudicate appeal:', err);
+      showToast(err?.message || 'Failed to adjudicate appeal.', 'error');
+    } finally {
+      setIsProcessingTx(false);
+    }
+  };
+
+  // Finalize Settlement after 30 blocks cooling-off period
+  const handleFinalizeSettlement = async (jobId: string) => {
+    if (!account) {
+      await handleConnectWallet();
+      return;
+    }
+    try {
+      setIsProcessingTx(true);
+      showToast(`Finalizing undisputed settlement for ${jobId}...`, 'info');
+      await finalizeSettlementOnChain(contractAddress, account, jobId);
+      showToast('Settlement finalized! Escrow released according to verdict.', 'success');
+      await loadProtocolData();
+      if (account) {
+        const bal = await fetchStudionetBalance(account);
+        setBalance(bal);
+      }
+    } catch (err: any) {
+      console.error('Failed to finalize settlement:', err);
+      showToast(err?.message || 'Failed to finalize settlement.', 'error');
     } finally {
       setIsProcessingTx(false);
     }
@@ -289,6 +343,7 @@ export const App: React.FC = () => {
     }
     if (filterStatus === 'OPEN') return job.status === 0;
     if (filterStatus === 'IN_INTERVIEW') return job.status === 1;
+    if (filterStatus === 'COOLING_OFF') return job.status === 7;
     if (filterStatus === 'IN_APPEAL') return job.status === 6;
     if (filterStatus === 'HIRED') return job.status === 2;
     if (filterStatus === 'SHORTLISTED') return job.status === 4;
@@ -296,7 +351,7 @@ export const App: React.FC = () => {
     return true;
   });
 
-  const activeJobCount = jobs.filter((j) => j.status === 0 || j.status === 1 || j.status === 6).length;
+  const activeJobCount = jobs.filter((j) => j.status === 0 || j.status === 1 || j.status === 6 || j.status === 7).length;
 
   return (
     <div className="min-h-screen bg-canvas text-sapphire flex flex-col font-sans selection:bg-champagne/20">
@@ -456,7 +511,7 @@ export const App: React.FC = () => {
 
               {/* Status Filter Tabs */}
               <div className="flex items-center p-1 rounded-lg bg-canvas-warm border border-borderline text-[11px] font-medium text-sapphire/70 overflow-x-auto">
-                {['ALL', 'OPEN', 'IN_INTERVIEW', 'IN_APPEAL', 'HIRED', 'SHORTLISTED', 'REJECTED'].map((st) => (
+                {['ALL', 'OPEN', 'IN_INTERVIEW', 'COOLING_OFF', 'IN_APPEAL', 'HIRED', 'SHORTLISTED', 'REJECTED'].map((st) => (
                   <button
                     key={st}
                     onClick={() => setFilterStatus(st)}
@@ -470,6 +525,8 @@ export const App: React.FC = () => {
                       ? 'All'
                       : st === 'IN_INTERVIEW'
                       ? 'In Review'
+                      : st === 'COOLING_OFF'
+                      ? 'Cooling-off'
                       : st === 'IN_APPEAL'
                       ? 'In Appeal'
                       : st.charAt(0) + st.slice(1).toLowerCase()}
@@ -591,8 +648,10 @@ export const App: React.FC = () => {
         isOpen={!!selectedJobForInspection}
         onClose={() => setSelectedJobForInspection(null)}
         onAdjudicate={handleAdjudicateInterview}
-        onRequestAppeal={handleRequestAppeal}
-        isAdjudicating={isProcessingTx}
+        onAppealVerdict={handleAppealVerdict}
+        onAdjudicateAppeal={handleAdjudicateAppeal}
+        onFinalizeSettlement={handleFinalizeSettlement}
+        isProcessing={isProcessingTx}
         currentUserAddress={account}
       />
     </div>

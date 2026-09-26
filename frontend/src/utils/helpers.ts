@@ -109,11 +109,18 @@ export const STATUS_MAP: Record<number, StatusMeta> = {
     description: 'Listing cancelled and escrow reclaimed',
   },
   6: {
-    label: 'In Appeal Deliberation',
+    label: 'In Dispute / Appeal',
     badgeBg: 'bg-purple-50',
     textColor: 'text-purple-800',
     borderColor: 'border-purple-300',
-    description: 'Appeal filed by participant; executive re-review convening',
+    description: '10% Bond staked. Senior Executive Board reviewing appeal evidence.',
+  },
+  7: {
+    label: 'Audit Completed (Cooling-off)',
+    badgeBg: 'bg-blue-50',
+    textColor: 'text-sapphire',
+    borderColor: 'border-sapphire/30',
+    description: 'Initial verdict reached. 30-block challenge window active before payout.',
   },
 };
 

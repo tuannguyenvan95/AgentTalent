@@ -13,7 +13,9 @@ def test_contract_syntax_and_structure(contract_source):
     assert "def post_job_bounty(" in contract_source
     assert "def submit_interview_response(" in contract_source
     assert "def adjudicate_interview(" in contract_source
-    assert "def request_appeal(" in contract_source
+    assert "def appeal_verdict(" in contract_source
+    assert "def adjudicate_appeal(" in contract_source
+    assert "def finalize_settlement(" in contract_source
     assert "def cancel_or_reclaim(" in contract_source
     assert "def get_job(" in contract_source
     assert "def get_job_count(" in contract_source
@@ -24,12 +26,14 @@ def test_contract_syntax_and_structure(contract_source):
 
 
 def test_job_bounty_struct_fields(contract_source):
-    """Ensure JobBounty defines all storage fields required by protocol specification."""
+    """Ensure JobBounty defines all storage fields required by protocol specification without default values."""
     expected_fields = [
         "job_id: str",
         "employer: Address",
         "candidate_agent: Address",
+        "dispute_initiator: Address",
         "bounty_amount: bigint",
+        "dispute_bond: bigint",
         "job_description: str",
         "interview_response_url: str",
         "status: u8",
@@ -40,9 +44,14 @@ def test_job_bounty_struct_fields(contract_source):
         "created_at_block: u256",
         "expires_at_block: u256",
         "interview_started_block: u256",
+        "audit_completed_block: u256",
     ]
     for field in expected_fields:
         assert field in contract_source, f"Missing storage field in JobBounty: {field}"
+
+    # Verify NO default assignments in dataclass (Pavel & Joaquin compliance)
+    assert 'appeal_reason: str = ""' not in contract_source
+    assert 'appeal_count: u8 = u8(0)' not in contract_source
 
 
 def test_semantic_consensus_rule(contract_source):
@@ -63,12 +72,13 @@ def test_native_transfers(contract_source):
     assert "emit_transfer(value=u256(escrow_val))" in contract_source
     assert "emit_transfer(value=u256(half_bounty))" in contract_source
     assert "emit_transfer(value=u256(employer_refund))" in contract_source
+    assert "emit_transfer(value=u256(bond_val))" in contract_source
 
 
 # --- Behavioral State Machine Simulation (GenVM Role-Based Unit Tests) ---
 
 class MockAgentTalentSimulator:
-    """Simulates GenVM state transitions for AgentTalent without requiring full validator nodes."""
+    """Simulates GenVM state transitions for AgentTalent with 30-block cooling-off and appeal bonds."""
 
     def __init__(self):
         self.jobs = {}
@@ -95,7 +105,9 @@ class MockAgentTalentSimulator:
             "job_id": job_id,
             "employer": sender,
             "candidate_agent": "0x0000000000000000000000000000000000000000",
+            "dispute_initiator": "0x0000000000000000000000000000000000000000",
             "bounty_amount": value,
+            "dispute_bond": 0,
             "job_description": clean_desc,
             "interview_response_url": "",
             "status": 0,  # OPEN
@@ -106,6 +118,7 @@ class MockAgentTalentSimulator:
             "created_at_block": current_block,
             "expires_at_block": expires_at,
             "interview_started_block": 0,
+            "audit_completed_block": 0,
         }
         self.job_ids.append(job_id)
         self.total_talent_locked += value
@@ -138,19 +151,108 @@ class MockAgentTalentSimulator:
         if j["status"] != 1:
             raise ValueError(f"Job {job_id} is not awaiting interview adjudication.")
 
+        self.job_counter += 1
         j["verdict"] = verdict
         j["reason"] = reason
         j["confidence"] = confidence
         j["competency_score"] = competency_score
+        j["status"] = 7  # AUDIT_COMPLETED (cooling-off window begins)
+        j["audit_completed_block"] = self.job_counter
+        # Notice: escrow is NOT transferred yet, total_talent_locked is untouched!
+
+    def appeal_verdict(self, sender: str, job_id: str, new_evidence_url: str, bond_value: int, current_block: int) -> None:
+        if job_id not in self.jobs:
+            raise KeyError(f"Job {job_id} does not exist.")
+        j = self.jobs[job_id]
+        if j["status"] != 7:
+            raise ValueError("Job is not in appeal challenge window.")
+        if sender != j["employer"] and sender != j["candidate_agent"]:
+            raise PermissionError("Only Employer or Candidate can file an appeal.")
+
+        if current_block > (j["audit_completed_block"] + 30):
+            raise ValueError("Appeal challenge window has expired. Eligible for settlement.")
+
+        required_bond = max(1, (j["bounty_amount"] * 10) // 100)
+        if bond_value < required_bond:
+            raise ValueError(f"Appeal bond insufficient. Minimum required: 10% ({required_bond} wei).")
+
+        clean_url = str(new_evidence_url).strip()
+        if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
+            raise ValueError("Valid new evidence URL (http/https) is required for appeal.")
+
+        self.job_counter += 1
+        j["status"] = 6  # DISPUTED
+        j["dispute_initiator"] = sender
+        j["dispute_bond"] = bond_value
+        j["interview_response_url"] = clean_url
+        j["verdict"] = "DISPUTED"
+        j["reason"] = f"Initial verdict appealed by {'Employer' if sender == j['employer'] else 'Candidate'}."
+        self.total_talent_locked += bond_value
+        self.balances[sender] -= bond_value
+
+    def adjudicate_appeal(self, job_id: str, appeal_verdict: str, reason: str) -> None:
+        if job_id not in self.jobs:
+            raise KeyError(f"Job {job_id} does not exist.")
+        j = self.jobs[job_id]
+        if j["status"] != 6:
+            raise ValueError("Job is not in active dispute.")
+
+        escrow = j["bounty_amount"]
+        bond = j["dispute_bond"]
+        appellant = j["dispute_initiator"]
+        j["dispute_bond"] = 0
+
+        self.total_talent_locked -= (escrow + bond)
+        self.total_hires_completed += 1
+
+        if appeal_verdict == "APPEAL_UPHELD_HIRED":
+            j["status"] = 2  # HIRED_PAID
+            j["verdict"] = "CANDIDATE_HIRED"
+            j["reason"] = reason
+            self.balances[j["candidate_agent"]] += escrow
+            self.balances[j["candidate_agent"]] += bond
+        elif appeal_verdict == "APPEAL_UPHELD_SHORTLISTED":
+            j["status"] = 4  # SHORTLISTED_PARTIAL
+            j["verdict"] = "CANDIDATE_SHORTLISTED"
+            j["reason"] = reason
+            half_bounty = escrow // 2
+            refund = escrow - half_bounty
+            if half_bounty > 0:
+                self.balances[j["candidate_agent"]] += half_bounty
+            if refund > 0:
+                self.balances[j["employer"]] += refund
+            self.balances[appellant] += bond
+        else:
+            # Appeal rejected
+            if appellant == j["candidate_agent"]:
+                j["status"] = 3  # REJECTED_REFUNDED
+                j["verdict"] = "CANDIDATE_REJECTED"
+                self.balances[j["employer"]] += escrow
+                self.balances[j["employer"]] += bond
+            else:
+                j["status"] = 2  # HIRED_PAID
+                j["verdict"] = "CANDIDATE_HIRED"
+                self.balances[j["candidate_agent"]] += escrow
+                self.balances[j["candidate_agent"]] += bond
+
+    def finalize_settlement(self, job_id: str, current_block: int) -> None:
+        if job_id not in self.jobs:
+            raise KeyError(f"Job {job_id} does not exist.")
+        j = self.jobs[job_id]
+        if j["status"] != 7:
+            raise ValueError(f"Job {job_id} is not awaiting final settlement.")
+
+        if current_block <= (j["audit_completed_block"] + 30):
+            raise ValueError("Appeal cooling-off window (30 blocks) is still active.")
 
         escrow = j["bounty_amount"]
         self.total_talent_locked -= escrow
         self.total_hires_completed += 1
 
-        if verdict == "CANDIDATE_HIRED":
+        if j["verdict"] == "CANDIDATE_HIRED":
             j["status"] = 2  # HIRED_PAID
             self.balances[j["candidate_agent"]] += escrow
-        elif verdict == "CANDIDATE_SHORTLISTED":
+        elif j["verdict"] == "CANDIDATE_SHORTLISTED":
             j["status"] = 4  # SHORTLISTED_PARTIAL
             half_bounty = escrow // 2
             refund = escrow - half_bounty
@@ -161,24 +263,6 @@ class MockAgentTalentSimulator:
         else:
             j["status"] = 3  # REJECTED_REFUNDED
             self.balances[j["employer"]] += escrow
-
-    def request_appeal(self, sender: str, job_id: str, appeal_rationale: str) -> None:
-        if job_id not in self.jobs:
-            raise KeyError(f"Job {job_id} does not exist.")
-        j = self.jobs[job_id]
-        if sender != j["employer"] and sender != j["candidate_agent"]:
-            raise PermissionError("Only the employer or candidate agent can file an appeal.")
-        if j.get("appeal_count", 0) >= 1:
-            raise ValueError("This case has already utilized its single allowable appeal.")
-        if j["status"] not in (2, 3, 4):
-            raise ValueError("Can only file an appeal on completed interview adjudications.")
-        clean_appeal = str(appeal_rationale).strip()
-        if len(clean_appeal) < 15:
-            raise ValueError("Appeal rationale must be at least 15 characters.")
-        j["appeal_count"] = j.get("appeal_count", 0) + 1
-        j["status"] = 6  # IN_APPEAL
-        j["appeal_reason"] = clean_appeal
-        j["reason"] = f"[APPEAL FILED by {sender}]: {clean_appeal} | Previous: " + j["reason"]
 
     def cancel_or_reclaim(self, sender: str, job_id: str, current_block: int) -> None:
         if job_id not in self.jobs:
@@ -205,42 +289,6 @@ class MockAgentTalentSimulator:
 
 
 # --- Integration Test Scenarios ---
-
-def test_appeal_and_dispute_protection():
-    """Verify appeal mechanism protects both parties and prevents unauthorized tampering."""
-    sim = MockAgentTalentSimulator()
-    job_id = sim.post_job_bounty(
-        sender="employer",
-        value=300,
-        job_description="Architect formal verification pipeline for cross-chain liquidity."
-    )
-    sim.submit_interview_response(sender="candidate", job_id=job_id, interview_response_url="https://agent.ai/sol")
-
-    # Initial adjudication rejects candidate
-    sim.adjudicate_interview(job_id=job_id, verdict="CANDIDATE_REJECTED", reason="Borderline", confidence=70, competency_score=50)
-    assert sim.jobs[job_id]["status"] == 3
-
-    # Third party cannot appeal
-    with pytest.raises(PermissionError):
-        sim.request_appeal(sender="third_party", job_id=job_id, appeal_rationale="Unjust verdict.")
-
-    # Short rationale fails
-    with pytest.raises(ValueError, match="at least 15 characters"):
-        sim.request_appeal(sender="candidate", job_id=job_id, appeal_rationale="Too short")
-
-    # Candidate files legitimate appeal
-    sim.request_appeal(
-        sender="candidate",
-        job_id=job_id,
-        appeal_rationale="Please re-evaluate section 4: invariant tests prove reentrancy safety."
-    )
-    assert sim.jobs[job_id]["status"] == 6  # IN_APPEAL
-    assert sim.jobs[job_id]["appeal_count"] == 1
-
-    # Second appeal blocked (no griefing)
-    with pytest.raises(ValueError, match="already utilized its single allowable appeal"):
-        sim.request_appeal(sender="candidate", job_id=job_id, appeal_rationale="Second appeal attempt should fail.")
-
 
 def test_post_job_validation_rules():
     """Verify escrow > 0 and description minimum length rules."""
@@ -294,8 +342,8 @@ def test_candidate_submission_guards():
         sim.submit_interview_response(sender="third_party", job_id=job_id, interview_response_url="https://other.ai/test")
 
 
-def test_adjudication_candidate_hired(mock_hired_interview_response):
-    """Test 100% bounty payout to candidate agent on CANDIDATE_HIRED verdict."""
+def test_cooling_off_and_finalize_hired(mock_hired_interview_response):
+    """Test initial adjudication transitions to AUDIT_COMPLETED (status 7), then finalizes after cooling-off."""
     sim = MockAgentTalentSimulator()
     job_id = sim.post_job_bounty(
         sender="employer",
@@ -305,9 +353,8 @@ def test_adjudication_candidate_hired(mock_hired_interview_response):
     sim.submit_interview_response(sender="candidate", job_id=job_id, interview_response_url="https://agent.ai/mev-protect")
 
     data = json.loads(mock_hired_interview_response["llm_response"])
-    assert data["verdict"] == "CANDIDATE_HIRED"
-    assert data["competency_score"] >= 80
 
+    # 1. Adjudication sets status 7 (AUDIT_COMPLETED). Funds are still locked in escrow!
     sim.adjudicate_interview(
         job_id=job_id,
         verdict=data["verdict"],
@@ -315,18 +362,24 @@ def test_adjudication_candidate_hired(mock_hired_interview_response):
         confidence=data["confidence"],
         competency_score=data["competency_score"]
     )
+    assert sim.jobs[job_id]["status"] == 7
+    assert sim.total_talent_locked == 500  # Crucial: Not deducted yet!
+    assert sim.balances["candidate"] == 100 # Not disbursed yet!
 
-    j = sim.jobs[job_id]
-    assert j["status"] == 2  # HIRED_PAID
-    assert j["verdict"] == "CANDIDATE_HIRED"
-    assert sim.balances["candidate"] == 100 + 500  # Received 100% bounty
-    assert sim.balances["employer"] == 500        # Unchanged
+    # 2. Premature finalize within 30 blocks is BLOCKED
+    with pytest.raises(ValueError, match="Appeal cooling-off window .* is still active"):
+        sim.finalize_settlement(job_id=job_id, current_block=sim.jobs[job_id]["audit_completed_block"] + 10)
+
+    # 3. Finalize after 30 blocks cooling-off succeeds safely
+    sim.finalize_settlement(job_id=job_id, current_block=sim.jobs[job_id]["audit_completed_block"] + 35)
+    assert sim.jobs[job_id]["status"] == 2  # HIRED_PAID
+    assert sim.balances["candidate"] == 600 # 100 + 500
     assert sim.total_talent_locked == 0
     assert sim.total_hires_completed == 1
 
 
-def test_adjudication_candidate_shortlisted(mock_shortlisted_interview_response):
-    """Test 50% partial stipend to candidate and 50% refund to employer on CANDIDATE_SHORTLISTED."""
+def test_appeal_flow_with_bond_and_slashing():
+    """Verify appellant must stake 10% bond, and appeal adjudication settles fairly."""
     sim = MockAgentTalentSimulator()
     job_id = sim.post_job_bounty(
         sender="employer",
@@ -335,54 +388,33 @@ def test_adjudication_candidate_shortlisted(mock_shortlisted_interview_response)
     )
     sim.submit_interview_response(sender="candidate", job_id=job_id, interview_response_url="https://agent.ai/collateral")
 
-    data = json.loads(mock_shortlisted_interview_response["llm_response"])
-    assert data["verdict"] == "CANDIDATE_SHORTLISTED"
-    assert 55 <= data["competency_score"] <= 79
+    # Initial adjudication rejects candidate
+    sim.adjudicate_interview(job_id=job_id, verdict="CANDIDATE_REJECTED", reason="Insufficient invariant checks", confidence=85, competency_score=45)
+    assert sim.jobs[job_id]["status"] == 7
+    audit_block = sim.jobs[job_id]["audit_completed_block"]
 
-    sim.adjudicate_interview(
-        job_id=job_id,
-        verdict=data["verdict"],
-        reason=data["reason"],
-        confidence=data["confidence"],
-        competency_score=data["competency_score"]
-    )
+    # Third party cannot appeal
+    with pytest.raises(PermissionError):
+        sim.appeal_verdict(sender="third_party", job_id=job_id, new_evidence_url="https://agent.ai/appeal", bond_value=40, current_block=audit_block + 5)
 
-    j = sim.jobs[job_id]
-    assert j["status"] == 4  # SHORTLISTED_PARTIAL
-    assert j["verdict"] == "CANDIDATE_SHORTLISTED"
-    assert sim.balances["candidate"] == 100 + 200  # 50% stipend
-    assert sim.balances["employer"] == 600 + 200   # 50% refund (1000 - 400 + 200 = 800)
-    assert sim.total_talent_locked == 0
-    assert sim.total_hires_completed == 1
+    # Insufficient bond (< 10% = 40) fails
+    with pytest.raises(ValueError, match="Appeal bond insufficient"):
+        sim.appeal_verdict(sender="candidate", job_id=job_id, new_evidence_url="https://agent.ai/appeal", bond_value=20, current_block=audit_block + 5)
 
+    # Expired appeal (> 30 blocks) fails
+    with pytest.raises(ValueError, match="Appeal challenge window has expired"):
+        sim.appeal_verdict(sender="candidate", job_id=job_id, new_evidence_url="https://agent.ai/appeal", bond_value=40, current_block=audit_block + 35)
 
-def test_adjudication_candidate_rejected(mock_rejected_interview_response):
-    """Test 100% refund to employer and 0% payout on CANDIDATE_REJECTED."""
-    sim = MockAgentTalentSimulator()
-    job_id = sim.post_job_bounty(
-        sender="employer",
-        value=300,
-        job_description="Create production-ready zkSync rollup sequencer agent."
-    )
-    sim.submit_interview_response(sender="candidate", job_id=job_id, interview_response_url="https://agent.ai/spam-reply")
+    # Valid appeal by candidate staking 40 wei bond
+    sim.appeal_verdict(sender="candidate", job_id=job_id, new_evidence_url="https://agent.ai/appeal_proof", bond_value=40, current_block=audit_block + 15)
+    assert sim.jobs[job_id]["status"] == 6  # DISPUTED
+    assert sim.balances["candidate"] == 60  # 100 - 40
+    assert sim.total_talent_locked == 440   # 400 bounty + 40 bond
 
-    data = json.loads(mock_rejected_interview_response["llm_response"])
-    assert data["verdict"] == "CANDIDATE_REJECTED"
-    assert data["competency_score"] < 55
-
-    sim.adjudicate_interview(
-        job_id=job_id,
-        verdict=data["verdict"],
-        reason=data["reason"],
-        confidence=data["confidence"],
-        competency_score=data["competency_score"]
-    )
-
-    j = sim.jobs[job_id]
-    assert j["status"] == 3  # REJECTED_REFUNDED
-    assert j["verdict"] == "CANDIDATE_REJECTED"
-    assert sim.balances["candidate"] == 100         # 0 payout
-    assert sim.balances["employer"] == 1000        # Full 100% refund
+    # Senior Board upholds appeal: candidate is hired, receives bounty + bond refund
+    sim.adjudicate_appeal(job_id=job_id, appeal_verdict="APPEAL_UPHELD_HIRED", reason="Formal verification proven in new proof.")
+    assert sim.jobs[job_id]["status"] == 2  # HIRED_PAID
+    assert sim.balances["candidate"] == 60 + 400 + 40  # 500 total!
     assert sim.total_talent_locked == 0
     assert sim.total_hires_completed == 1
 

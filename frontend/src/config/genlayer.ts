@@ -8,7 +8,7 @@ export const STUDIONET_RPC_URL = 'https://studio.genlayer.com/api';
 export const STUDIO_URL = 'https://studio.genlayer.com';
 
 // Default contract address (can be updated via UI or localStorage)
-export const DEFAULT_CONTRACT_ADDRESS = '0x3cea64d8eCEb97D55257608f9116dAffE1AC388D';
+export const DEFAULT_CONTRACT_ADDRESS = '0x2532644fD92172c6EdaA4c72Ff06842778a1643B';
 
 export function getSavedContractAddress(): string {
   if (typeof window !== 'undefined') {
@@ -82,19 +82,20 @@ export interface JobBountyData {
   job_id: string;
   employer: string;
   candidate_agent: string;
+  dispute_initiator: string;
   bounty_amount: string;
+  dispute_bond: string;
   job_description: string;
   interview_response_url: string;
-  status: number; // 0: OPEN, 1: IN_INTERVIEW, 2: HIRED_PAID, 3: REJECTED_REFUNDED, 4: SHORTLISTED_PARTIAL, 5: CANCELLED
-  verdict: string; // "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED", "CANCELLED"
+  status: number; // 0: OPEN, 1: IN_INTERVIEW, 2: HIRED_PAID, 3: REJECTED_REFUNDED, 4: SHORTLISTED_PARTIAL, 5: CANCELLED, 6: DISPUTED, 7: AUDIT_COMPLETED
+  verdict: string; // "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED", "DISPUTED", "CANCELLED"
   reason: string;
   confidence: number;
   competency_score: number;
   created_at_block?: string;
   expires_at_block?: string;
   interview_started_block?: string;
-  appeal_reason?: string;
-  appeal_count?: number;
+  audit_completed_block?: string;
 }
 
 export interface ProtocolStats {
@@ -385,25 +386,71 @@ export async function cancelOrReclaimOnChain(
 }
 
 /**
- * File an on-chain appeal for re-evaluation (Employer or Candidate)
+ * Appellant stakes 10% bond and files new evidence URL within 30 blocks
  */
-export async function requestAppealOnChain(
+export async function appealVerdictOnChain(
   contractAddress: string,
   userAddress: string,
   jobId: string,
-  appealRationale: string
+  newEvidenceUrl: string,
+  bondWei: bigint
 ): Promise<string> {
   await ensureStudionet();
   const client = getGenLayerClient(userAddress);
 
   const txHash = await client.writeContract({
     address: contractAddress as `0x${string}`,
-    functionName: 'request_appeal',
-    args: [jobId, appealRationale.trim()],
+    functionName: 'appeal_verdict',
+    args: [jobId, newEvidenceUrl.trim()],
+    value: bondWei,
+  });
+
+  await client.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
+
+/**
+ * Senior Executive Board reviews appealed interview solution
+ */
+export async function adjudicateAppealOnChain(
+  contractAddress: string,
+  userAddress: string,
+  jobId: string
+): Promise<string> {
+  await ensureStudionet();
+  const client = getGenLayerClient(userAddress);
+
+  const txHash = await client.writeContract({
+    address: contractAddress as `0x${string}`,
+    functionName: 'adjudicate_appeal',
+    args: [jobId],
     value: 0n,
   });
 
   await client.waitForTransactionReceipt({ hash: txHash });
   return txHash;
 }
+
+/**
+ * Finalizes non-contested payout after 30 blocks appeal cooling-off window
+ */
+export async function finalizeSettlementOnChain(
+  contractAddress: string,
+  userAddress: string,
+  jobId: string
+): Promise<string> {
+  await ensureStudionet();
+  const client = getGenLayerClient(userAddress);
+
+  const txHash = await client.writeContract({
+    address: contractAddress as `0x${string}`,
+    functionName: 'finalize_settlement',
+    args: [jobId],
+    value: 0n,
+  });
+
+  await client.waitForTransactionReceipt({ hash: txHash });
+  return txHash;
+}
+
 

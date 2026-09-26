@@ -12,17 +12,22 @@ import {
   RotateCcw,
   AlertCircle,
   ShieldCheck,
+  Coins,
+  Check,
+  Clock,
 } from 'lucide-react';
 import { JobBountyData } from '../config/genlayer';
-import { formatGen, getStatusMeta, getCompetencyLevel } from '../utils/helpers';
+import { formatGen, getStatusMeta, getCompetencyLevel, shortenAddress } from '../utils/helpers';
 
 interface BoardInspectorModalProps {
   job: JobBountyData | null;
   isOpen: boolean;
   onClose: () => void;
   onAdjudicate?: (jobId: string) => Promise<void>;
-  onRequestAppeal?: (jobId: string, rationale: string) => Promise<void>;
-  isAdjudicating?: boolean;
+  onAppealVerdict?: (jobId: string, newEvidenceUrl: string, bondWei: bigint) => Promise<void>;
+  onAdjudicateAppeal?: (jobId: string) => Promise<void>;
+  onFinalizeSettlement?: (jobId: string) => Promise<void>;
+  isProcessing?: boolean;
   currentUserAddress?: string;
 }
 
@@ -31,12 +36,14 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   isOpen,
   onClose,
   onAdjudicate,
-  onRequestAppeal,
-  isAdjudicating = false,
+  onAppealVerdict,
+  onAdjudicateAppeal,
+  onFinalizeSettlement,
+  isProcessing = false,
   currentUserAddress = '',
 }) => {
   const [showAppealForm, setShowAppealForm] = useState(false);
-  const [appealRationale, setAppealRationale] = useState('');
+  const [newEvidenceUrl, setNewEvidenceUrl] = useState('');
   const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
   const [appealError, setAppealError] = useState<string | null>(null);
 
@@ -45,28 +52,32 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   const statusMeta = getStatusMeta(job.status);
   const competency = getCompetencyLevel(job.competency_score);
 
-  const isAwaitingAdjudication = job.status === 1 || job.status === 6;
+  const isInitialAuditWaiting = job.status === 1;
+  const isAuditCompleted = job.status === 7; // In 30-block cooling-off window
+  const isDisputed = job.status === 6;
   const isSettled = job.status === 2 || job.status === 3 || job.status === 4;
 
-  const isParticipant =
-    currentUserAddress &&
-    (currentUserAddress.toLowerCase() === job.employer.toLowerCase() ||
-      currentUserAddress.toLowerCase() === job.candidate_agent.toLowerCase());
+  const isEmployer = currentUserAddress && currentUserAddress.toLowerCase() === job.employer.toLowerCase();
+  const isCandidate = currentUserAddress && currentUserAddress.toLowerCase() === job.candidate_agent.toLowerCase();
+  const isParticipant = isEmployer || isCandidate;
 
-  const canAppeal = isSettled && (job.appeal_count || 0) === 0 && isParticipant;
+  // Calculate required 10% appeal bond in bigint
+  const bountyBigInt = BigInt(job.bounty_amount || '0');
+  const requiredBondWei = (bountyBigInt * 10n) / 100n > 0n ? (bountyBigInt * 10n) / 100n : 1n;
 
   const handleAppealSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAppealError(null);
-    if (!appealRationale || appealRationale.trim().length < 15) {
-      setAppealError('Please provide at least 15 characters explaining your dispute rationale.');
+    const clean = newEvidenceUrl.trim();
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      setAppealError('Please provide a valid public HTTP or HTTPS URL for your appeal evidence.');
       return;
     }
-    if (!onRequestAppeal) return;
+    if (!onAppealVerdict) return;
 
     try {
       setIsSubmittingAppeal(true);
-      await onRequestAppeal(job.job_id, appealRationale.trim());
+      await onAppealVerdict(job.job_id, clean, requiredBondWei);
       setShowAppealForm(false);
     } catch (err: any) {
       setAppealError(err?.message || 'Failed to submit appeal.');
@@ -130,45 +141,45 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
               <div className="flex flex-col items-center">
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold mb-1 shadow-sm ${
-                    job.status >= 1
-                      ? 'bg-sapphire text-white'
-                      : 'bg-borderline text-sapphire/40'
+                    job.status >= 1 ? 'bg-sapphire text-white' : 'bg-borderline text-sapphire/40'
                   }`}
                 >
                   {job.status >= 1 ? '✓' : '2'}
                 </div>
-                <span className="font-semibold text-sapphire text-[11px]">2. Solution Nộp</span>
-                <span className="text-[10px] text-sapphire/50">Live URL scraped</span>
+                <span className="font-semibold text-sapphire text-[11px]">2. Solution Submitted</span>
+                <span className="text-[10px] text-sapphire/50">Scraped via GenVM</span>
               </div>
 
               <div className="flex flex-col items-center">
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold mb-1 shadow-sm ${
-                    job.status >= 2 && job.status !== 6
+                    job.status === 7
+                      ? 'bg-champagne text-sapphire font-extrabold animate-pulse'
+                      : job.status === 6
+                      ? 'bg-purple-700 text-white'
+                      : isSettled
                       ? 'bg-sapphire text-white'
-                      : job.status === 1 || job.status === 6
-                      ? 'bg-champagne text-sapphire animate-pulse'
                       : 'bg-borderline text-sapphire/40'
                   }`}
                 >
-                  {job.status >= 2 && job.status !== 6 ? '✓' : '3'}
+                  {isSettled ? '✓' : '3'}
                 </div>
-                <span className="font-semibold text-sapphire text-[11px]">3. AI Jury Audit</span>
-                <span className="text-[10px] text-sapphire/50">Subjective consensus</span>
+                <span className="font-semibold text-sapphire text-[11px]">3. Cooling-off (30 blk)</span>
+                <span className="text-[10px] text-sapphire/50">
+                  {job.status === 7 ? 'Challenge Window' : job.status === 6 ? 'In Dispute' : 'Audit Ready'}
+                </span>
               </div>
 
               <div className="flex flex-col items-center">
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold mb-1 shadow-sm ${
-                    job.status >= 2 && job.status !== 6
-                      ? 'bg-sage text-white'
-                      : 'bg-borderline text-sapphire/40'
+                    isSettled ? 'bg-sage text-white' : 'bg-borderline text-sapphire/40'
                   }`}
                 >
-                  {job.status >= 2 && job.status !== 6 ? '✓' : '4'}
+                  {isSettled ? '✓' : '4'}
                 </div>
                 <span className="font-semibold text-sapphire text-[11px]">4. Settlement</span>
-                <span className="text-[10px] text-sapphire/50">Disbursed / Protected</span>
+                <span className="text-[10px] text-sapphire/50">Disbursed Safely</span>
               </div>
             </div>
           </div>
@@ -190,9 +201,11 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
                 )}
                 <span className={`text-base font-bold font-serif-title ${statusMeta.textColor}`}>
                   {job.status === 6
-                    ? 'In Appeal Deliberation'
+                    ? 'In Dispute / Appeal'
+                    : job.status === 7
+                    ? `Audit Completed • ${job.verdict.replace(/_/g, ' ')} (Cooling-off)`
                     : job.verdict === 'PENDING'
-                    ? isAwaitingAdjudication
+                    ? isInitialAuditWaiting
                       ? 'Executive Board Convening'
                       : 'Role Open'
                     : job.verdict.replace(/_/g, ' ')}
@@ -204,28 +217,54 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
             <div className="flex items-center gap-3 shrink-0">
               <div className="text-right">
                 <span className="block text-[10px] font-semibold uppercase tracking-wider text-sapphire/50">
-                  Bounty Settlement
+                  Bounty Escrow
                 </span>
                 <span className="font-mono font-bold text-sm text-sapphire">
                   {formatGen(job.bounty_amount)} GEN
                 </span>
               </div>
 
-              {isAwaitingAdjudication && onAdjudicate && (
+              {/* Status 1: Initial Adjudication */}
+              {isInitialAuditWaiting && onAdjudicate && (
                 <button
                   onClick={() => onAdjudicate(job.job_id)}
-                  disabled={isAdjudicating}
+                  disabled={isProcessing}
                   className="px-4 py-2 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 flex items-center space-x-1.5"
                 >
                   <Cpu className="w-3.5 h-3.5 text-champagne" />
-                  <span>{isAdjudicating ? 'Deliberating...' : job.status === 6 ? 'Re-Adjudicate Appeal' : 'Trigger Adjudication'}</span>
+                  <span>{isProcessing ? 'Deliberating...' : 'Trigger Adjudication'}</span>
+                </button>
+              )}
+
+              {/* Status 6: Disputed -> Senior Board Adjudicate Appeal */}
+              {isDisputed && onAdjudicateAppeal && (
+                <button
+                  onClick={() => onAdjudicateAppeal(job.job_id)}
+                  disabled={isProcessing}
+                  className="px-4 py-2 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  <Scale className="w-3.5 h-3.5 text-champagne" />
+                  <span>{isProcessing ? 'Deliberating Appeal...' : 'Senior Board Adjudicate'}</span>
+                </button>
+              )}
+
+              {/* Status 7: Cooling-off -> Finalize Settlement */}
+              {isAuditCompleted && onFinalizeSettlement && (
+                <button
+                  onClick={() => onFinalizeSettlement(job.job_id)}
+                  disabled={isProcessing}
+                  className="px-4 py-2 rounded-lg bg-sage hover:bg-sage-light text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 flex items-center space-x-1.5"
+                  title="Finalize payout after 30 blocks cooling-off period"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{isProcessing ? 'Finalizing...' : 'Finalize Payout'}</span>
                 </button>
               )}
             </div>
           </div>
 
-          {/* Scores & Circular Animated Gauge (if adjudicated) */}
-          {job.status > 1 && (
+          {/* Scores & Circular Animated Gauge (if evaluated) */}
+          {(job.status > 1 || job.status === 7) && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Circular Animated Competency Gauge */}
               <div className="p-4 rounded-xl bg-canvas border border-borderline flex items-center space-x-4">
@@ -303,13 +342,128 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
                 </div>
                 <div className="mt-1">
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    VERIFIED MATCH
+                    CANARY_AGENT_TALENT_V1
                   </span>
                 </div>
                 <p className="text-[11px] text-sapphire/60 mt-2">
                   Anti-Prompt Injection Guard active against untrusted candidate payloads.
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Cooling-off Window Banner & Appeal Action (Status 7) */}
+          {isAuditCompleted && (
+            <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-amber-900">
+                  <Clock className="w-4 h-4 text-amber-700" />
+                  <span className="font-bold text-xs uppercase tracking-wider">
+                    30-Block Cooling-off Period Active
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                  Audit Block: {job.audit_completed_block || 'Active'}
+                </span>
+              </div>
+
+              <p className="text-xs text-amber-900/80">
+                Pavel & Joaquin Accounting Rule: Funds remain safely in escrow. If undisputed within 30 blocks, anyone can finalize the payout. If contested, either Employer or Candidate can stake a 10% bond to trigger Senior Board review.
+              </p>
+
+              {isParticipant && !showAppealForm && (
+                <div className="pt-1 flex items-center justify-between">
+                  <span className="text-[11px] text-amber-800">
+                    Required Dispute Bond: <strong>{formatGen(requiredBondWei.toString())} GEN (10%)</strong>
+                  </span>
+                  <button
+                    onClick={() => setShowAppealForm(true)}
+                    className="px-3.5 py-1.5 rounded-lg bg-amber-800 hover:bg-amber-900 text-white text-xs font-semibold transition flex items-center space-x-1"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Contest Verdict & Appeal</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Appeal Submission Form (Staking 10% Bond) */}
+          {showAppealForm && (
+            <form onSubmit={handleAppealSubmit} className="p-4 rounded-xl bg-canvas border border-champagne space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-sapphire flex items-center gap-1.5">
+                  <Coins className="w-4 h-4 text-champagne-dark" />
+                  Stake 10% Bond & Submit New Appeal Evidence
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAppealForm(false)}
+                  className="text-sapphire/50 hover:text-sapphire text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              {appealError && (
+                <div className="p-2.5 rounded bg-bordeaux-soft border border-bordeaux/30 text-bordeaux text-xs flex items-center space-x-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{appealError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[11px] font-semibold text-sapphire/70 mb-1">
+                  New Evidence / Clarified System Design URL:
+                </label>
+                <input
+                  type="url"
+                  value={newEvidenceUrl}
+                  onChange={(e) => setNewEvidenceUrl(e.target.value)}
+                  placeholder="https://raw.githubusercontent.com/... or https://pastebin.com/raw/..."
+                  className="w-full px-3 py-2 rounded-lg border border-borderline focus:border-sapphire text-xs bg-surface font-mono"
+                  required
+                />
+              </div>
+
+              <div className="p-2.5 rounded bg-surface border border-borderline text-[11px] text-sapphire/70">
+                You will stake <strong>{formatGen(requiredBondWei.toString())} GEN</strong>. If your appeal is upheld, your bond is refunded. If dismissed, the bond is slashed to the counterparty.
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAppealForm(false)}
+                  className="px-3 py-1.5 rounded border border-borderline text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingAppeal}
+                  className="px-4 py-1.5 rounded bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold shadow disabled:opacity-50"
+                >
+                  {isSubmittingAppeal ? 'Staking Bond...' : 'Stake 10% Bond & File Appeal'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Active Dispute Information (Status 6) */}
+          {isDisputed && (
+            <div className="p-4 rounded-xl bg-purple-50/90 border border-purple-200 text-xs text-purple-900 space-y-2">
+              <div className="flex items-center justify-between font-bold">
+                <span className="flex items-center gap-1.5">
+                  <Scale className="w-4 h-4 text-purple-700" />
+                  Active Dispute Under Review
+                </span>
+                <span className="font-mono text-purple-800">
+                  Staked Bond: {formatGen(job.dispute_bond)} GEN
+                </span>
+              </div>
+              <p className="text-[11px] text-purple-800/80">
+                Appellant: <span className="font-mono">{shortenAddress(job.dispute_initiator, 4)}</span>. Senior Executive Board will review the new evidence URL via subjective consensus.
+              </p>
             </div>
           )}
 
@@ -365,71 +519,6 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
               </p>
             </div>
           </div>
-
-          {/* Appeal / Dispute Section (Protecting Both Sides) */}
-          {canAppeal && !showAppealForm && (
-            <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-900">
-              <div>
-                <span className="font-bold flex items-center gap-1.5">
-                  <RotateCcw className="w-4 h-4 text-amber-700" />
-                  Dispute Window Open (Participant Protection)
-                </span>
-                <p className="text-[11px] text-amber-800/80 mt-0.5">
-                  As an active participant, you can file a one-time formal appeal if you believe the AI Jury missed crucial technical nuances.
-                </p>
-              </div>
-              <button
-                onClick={() => setShowAppealForm(true)}
-                className="px-4 py-2 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-semibold text-xs transition shrink-0"
-              >
-                File On-Chain Appeal
-              </button>
-            </div>
-          )}
-
-          {showAppealForm && (
-            <form onSubmit={handleAppealSubmit} className="p-4 rounded-xl bg-canvas border border-champagne space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-sapphire flex items-center gap-1.5">
-                  <RotateCcw className="w-4 h-4 text-champagne-dark" />
-                  Submit Formal Appeal & Dispute Rationale
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowAppealForm(false)}
-                  className="text-sapphire/50 hover:text-sapphire text-xs"
-                >
-                  Cancel
-                </button>
-              </div>
-
-              {appealError && (
-                <div className="p-2.5 rounded bg-bordeaux-soft border border-bordeaux/30 text-bordeaux text-xs flex items-center space-x-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  <span>{appealError}</span>
-                </div>
-              )}
-
-              <textarea
-                rows={3}
-                value={appealRationale}
-                onChange={(e) => setAppealRationale(e.target.value)}
-                placeholder="Explain clearly which aspects of your solution were misunderstood, or why the verdict warrants a second-stage jury re-review..."
-                className="w-full p-2.5 rounded-lg border border-borderline focus:border-sapphire text-xs bg-surface resize-none"
-                required
-              />
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={isSubmittingAppeal}
-                  className="px-4 py-2 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold transition disabled:opacity-50"
-                >
-                  {isSubmittingAppeal ? 'Recording Appeal on Studionet...' : 'Submit Appeal On-Chain'}
-                </button>
-              </div>
-            </form>
-          )}
 
           {/* Candidate Response URL & Employer Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

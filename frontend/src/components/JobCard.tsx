@@ -1,4 +1,4 @@
-import { Sparkles, ChevronRight, ExternalLink, Cpu, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Sparkles, ChevronRight, ExternalLink, Cpu, RotateCcw, AlertTriangle, Clock } from 'lucide-react';
 import { JobBountyData } from '../config/genlayer';
 import { formatGen, shortenAddress, getStatusMeta, getCompetencyLevel } from '../utils/helpers';
 
@@ -97,27 +97,35 @@ export const JobCard: React.FC<JobCardProps> = ({
         </div>
       </div>
 
-      {/* Evaluation Results (if adjudicated or submitted) */}
-      {job.status > 1 && job.status !== 6 ? (
-        <div className="px-5 py-3 bg-canvas border-b border-borderline/60 flex items-center justify-between">
+      {/* Evaluation Results / Deliberation Banner */}
+      {job.status === 7 ? (
+        <div className="px-5 py-3 bg-amber-50/80 border-b border-amber-200 flex items-center justify-between text-xs text-amber-900">
           <div className="flex items-center space-x-2">
-            <span className={`text-base font-bold font-display-luxury ${competency.color}`}>
-              {competency.grade}
-            </span>
+            <Clock className="w-3.5 h-3.5 text-amber-700 animate-pulse" />
             <div className="flex flex-col">
-              <span className="text-[11px] font-semibold text-sapphire leading-tight">
-                Score: {job.competency_score} / 100
-              </span>
-              <span className="text-[10px] text-sapphire/60">
-                Confidence: {job.confidence}%
-              </span>
+              <span className="font-semibold text-[11px]">Audit Done • Cooling-Off (30 Blk)</span>
+              <span className="text-[10px] text-amber-800/80">Score: {job.competency_score}/100 • Verdict: {job.verdict.replace(/_/g, ' ')}</span>
             </div>
           </div>
           <button
             onClick={() => onInspectClick(job)}
-            className="text-[11px] font-semibold text-sapphire hover:text-champagne-dark transition flex items-center space-x-1"
+            className="text-[11px] font-semibold text-amber-900 hover:underline flex items-center space-x-1"
           >
-            <span>View Deliberation</span>
+            <span>Review & Settle</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ) : job.status === 6 ? (
+        <div className="px-5 py-3 bg-purple-50/80 border-b border-purple-200 flex items-center justify-between text-xs text-purple-900">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-purple-700 animate-bounce" />
+            <span className="font-semibold text-[11px]">Appeal Filed • Re-Review Convening</span>
+          </div>
+          <button
+            onClick={() => onInspectClick(job)}
+            className="text-[11px] font-semibold text-purple-800 hover:underline flex items-center space-x-1"
+          >
+            <span>View Appeal</span>
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -139,17 +147,27 @@ export const JobCard: React.FC<JobCardProps> = ({
             </a>
           )}
         </div>
-      ) : job.status === 6 ? (
-        <div className="px-5 py-3 bg-purple-50/80 border-b border-purple-200 flex items-center justify-between text-xs text-purple-900">
+      ) : job.status > 1 && job.status !== 6 && job.status !== 7 ? (
+        <div className="px-5 py-3 bg-canvas border-b border-borderline/60 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-purple-700 animate-bounce" />
-            <span className="font-semibold text-[11px]">Appeal Filed • Re-Review Convening</span>
+            <span className={`text-base font-bold font-display-luxury ${competency.color}`}>
+              {competency.grade}
+            </span>
+            <div className="flex flex-col">
+              <span className="text-[11px] font-semibold text-sapphire leading-tight">
+                Score: {job.competency_score} / 100
+              </span>
+              <span className="text-[10px] text-sapphire/60">
+                Confidence: {job.confidence}%
+              </span>
+            </div>
           </div>
           <button
             onClick={() => onInspectClick(job)}
-            className="text-[11px] font-semibold text-purple-800 hover:underline"
+            className="text-[11px] font-semibold text-sapphire hover:text-champagne-dark transition flex items-center space-x-1"
           >
-            View Appeal
+            <span>Audited Deliberation</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
       ) : null}
@@ -202,20 +220,31 @@ export const JobCard: React.FC<JobCardProps> = ({
             </button>
           )}
 
+          {/* Status 7: Cooling-off -> Settle / Appeal Modal */}
+          {job.status === 7 && (
+            <button
+              onClick={() => onInspectClick(job)}
+              className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Settle / Appeal</span>
+            </button>
+          )}
+
           {/* Status 6: In Appeal -> Re-Adjudicate */}
           {job.status === 6 && (
             <button
-              onClick={() => onAdjudicateClick(job.job_id)}
+              onClick={() => onInspectClick(job)}
               disabled={isProcessing}
               className="px-4 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
             >
               <Cpu className="w-3.5 h-3.5 text-champagne" />
-              <span>Re-Adjudicate</span>
+              <span>Inspect Appeal</span>
             </button>
           )}
 
-          {/* Status >= 2: Settled */}
-          {job.status >= 2 && job.status !== 6 && (
+          {/* Status >= 2 && != 6 && != 7: Settled */}
+          {job.status >= 2 && job.status !== 6 && job.status !== 7 && (
             <button
               onClick={() => onInspectClick(job)}
               className="px-3.5 py-1.5 rounded-lg bg-canvas border border-borderline text-sapphire text-xs font-semibold hover:border-champagne transition"
