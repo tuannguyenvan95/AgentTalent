@@ -1,6 +1,7 @@
 import { Sparkles, ChevronRight, ExternalLink, Cpu, RotateCcw, AlertTriangle, Clock } from 'lucide-react';
 import { JobBountyData } from '../config/genlayer';
 import { formatGen, shortenAddress, getStatusMeta, getCompetencyLevel } from '../utils/helpers';
+import { playTactileClick } from '../utils/audio';
 
 interface JobCardProps {
   job: JobBountyData;
@@ -175,7 +176,10 @@ export const JobCard: React.FC<JobCardProps> = ({
       {/* Card Actions */}
       <div className="p-4 bg-surface flex items-center justify-between gap-2">
         <button
-          onClick={() => onInspectClick(job)}
+          onClick={() => {
+            playTactileClick();
+            onInspectClick(job);
+          }}
           className="px-3 py-1.5 rounded-lg border border-borderline text-sapphire/80 hover:text-sapphire hover:bg-canvas text-xs font-medium transition"
         >
           Details
@@ -187,7 +191,10 @@ export const JobCard: React.FC<JobCardProps> = ({
             <>
               {isEmployer ? (
                 <button
-                  onClick={() => onReclaimClick(job.job_id)}
+                  onClick={() => {
+                    playTactileClick();
+                    onReclaimClick(job.job_id);
+                  }}
                   disabled={isProcessing}
                   className="px-3 py-1.5 rounded-lg border border-borderline text-sapphire/70 hover:text-bordeaux hover:border-bordeaux/40 text-xs font-medium transition flex items-center space-x-1"
                   title="Reclaim escrow if duration expired"
@@ -197,7 +204,10 @@ export const JobCard: React.FC<JobCardProps> = ({
                 </button>
               ) : (
                 <button
-                  onClick={() => onApplyClick(job)}
+                  onClick={() => {
+                    playTactileClick();
+                    onApplyClick(job);
+                  }}
                   disabled={isProcessing}
                   className="px-4 py-1.5 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
                 >
@@ -211,7 +221,10 @@ export const JobCard: React.FC<JobCardProps> = ({
           {/* Status 1: In Interview -> Adjudicate */}
           {job.status === 1 && (
             <button
-              onClick={() => onAdjudicateClick(job.job_id)}
+              onClick={() => {
+                playTactileClick();
+                onAdjudicateClick(job.job_id);
+              }}
               disabled={isProcessing}
               className="px-4 py-1.5 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
             >
@@ -223,7 +236,10 @@ export const JobCard: React.FC<JobCardProps> = ({
           {/* Status 7: Cooling-off -> Settle / Appeal Modal */}
           {job.status === 7 && (
             <button
-              onClick={() => onInspectClick(job)}
+              onClick={() => {
+                playTactileClick();
+                onInspectClick(job);
+              }}
               className="px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
             >
               <Clock className="w-3.5 h-3.5" />
@@ -234,7 +250,10 @@ export const JobCard: React.FC<JobCardProps> = ({
           {/* Status 6: In Appeal -> Re-Adjudicate */}
           {job.status === 6 && (
             <button
-              onClick={() => onInspectClick(job)}
+              onClick={() => {
+                playTactileClick();
+                onInspectClick(job);
+              }}
               disabled={isProcessing}
               className="px-4 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold shadow-sm transition flex items-center space-x-1.5"
             >
@@ -246,7 +265,10 @@ export const JobCard: React.FC<JobCardProps> = ({
           {/* Status >= 2 && != 6 && != 7: Settled */}
           {job.status >= 2 && job.status !== 6 && job.status !== 7 && (
             <button
-              onClick={() => onInspectClick(job)}
+              onClick={() => {
+                playTactileClick();
+                onInspectClick(job);
+              }}
               className="px-3.5 py-1.5 rounded-lg bg-canvas border border-borderline text-sapphire text-xs font-semibold hover:border-champagne transition"
             >
               Audited Logs

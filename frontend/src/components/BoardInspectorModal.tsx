@@ -15,9 +15,16 @@ import {
   Coins,
   Check,
   Clock,
+  Printer,
+  Share2,
+  Copy,
+  FileText,
+  Sparkles,
+  CheckCheck,
 } from 'lucide-react';
 import { JobBountyData } from '../config/genlayer';
 import { formatGen, getStatusMeta, getCompetencyLevel, shortenAddress } from '../utils/helpers';
+import { playTactileClick, playSuccessChime, playAlertChime } from '../utils/audio';
 
 interface BoardInspectorModalProps {
   job: JobBountyData | null;
@@ -29,6 +36,7 @@ interface BoardInspectorModalProps {
   onFinalizeSettlement?: (jobId: string) => Promise<void>;
   isProcessing?: boolean;
   currentUserAddress?: string;
+  currentBlockNumber?: number;
 }
 
 export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
@@ -41,11 +49,14 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   onFinalizeSettlement,
   isProcessing = false,
   currentUserAddress = '',
+  currentBlockNumber = 0,
 }) => {
   const [showAppealForm, setShowAppealForm] = useState(false);
   const [newEvidenceUrl, setNewEvidenceUrl] = useState('');
   const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
   const [appealError, setAppealError] = useState<string | null>(null);
+  const [showCertificateModal, setShowCertificateModal] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   if (!isOpen || !job) return null;
 
@@ -60,6 +71,14 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   const isEmployer = currentUserAddress && currentUserAddress.toLowerCase() === job.employer.toLowerCase();
   const isCandidate = currentUserAddress && currentUserAddress.toLowerCase() === job.candidate_agent.toLowerCase();
   const isParticipant = isEmployer || isCandidate;
+
+  // Real-time on-chain block calculations
+  const auditCompletedBlock = parseInt(job.audit_completed_block || '0', 10);
+  const unlockBlock = auditCompletedBlock > 0 ? auditCompletedBlock + 30 : 0;
+  const blocksRemaining = currentBlockNumber > 0 && unlockBlock > 0 ? Math.max(0, unlockBlock - currentBlockNumber) : 0;
+  const blocksElapsed = Math.min(30, Math.max(0, 30 - blocksRemaining));
+  const coolingProgress = Math.min(100, Math.round((blocksElapsed / 30) * 100));
+  const isSettlementUnlocked = isAuditCompleted && (blocksRemaining === 0 || (currentBlockNumber === 0 && auditCompletedBlock > 0));
 
   // Calculate required 10% appeal bond in bigint
   const bountyBigInt = BigInt(job.bounty_amount || '0');
@@ -77,13 +96,30 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
 
     try {
       setIsSubmittingAppeal(true);
+      playAlertChime();
       await onAppealVerdict(job.job_id, clean, requiredBondWei);
       setShowAppealForm(false);
+      playSuccessChime();
     } catch (err: any) {
       setAppealError(err?.message || 'Failed to submit appeal.');
     } finally {
       setIsSubmittingAppeal(false);
     }
+  };
+
+  const handleShareOnX = () => {
+    playTactileClick();
+    const text = encodeURIComponent(
+      `Autonomous AI Agent recruitment audit verified on @GenLayer!\n\nRole: ${job.job_id}\nVerdict: ${job.verdict.replace(/_/g, ' ')}\nCompetency Score: ${job.competency_score}/100\nConfidence: ${job.confidence}%\n\nDeliberated on-chain by Executive AI Jury on Studionet:\nhttps://agenttalent.vercel.app`
+    );
+    window.open(`https://twitter.com/intent/tweet?text=${text}`, '_blank');
+  };
+
+  const handleCopyShareLink = () => {
+    playTactileClick();
+    navigator.clipboard.writeText(window.location.href);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   // SVG Circular Meter calculations
@@ -114,12 +150,50 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-sapphire/50 hover:text-sapphire hover:bg-canvas transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center space-x-2">
+            {(job.status > 1 || job.status === 7) && (
+              <>
+                <button
+                  onClick={() => {
+                    playTactileClick();
+                    setShowCertificateModal(true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-champagne-soft border border-champagne/50 hover:bg-champagne hover:text-sapphire text-champagne-dark text-xs font-semibold transition flex items-center space-x-1.5"
+                  title="View Swiss Certified Audit Diploma"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Certified Diploma</span>
+                </button>
+
+                <button
+                  onClick={handleShareOnX}
+                  className="p-1.5 rounded-lg border border-borderline hover:border-champagne text-sapphire/70 hover:text-sapphire bg-canvas text-xs transition"
+                  title="Share Verdict to X / Twitter"
+                >
+                  <Share2 className="w-4 h-4" />
+                </button>
+
+                <button
+                  onClick={handleCopyShareLink}
+                  className="p-1.5 rounded-lg border border-borderline hover:border-champagne text-sapphire/70 hover:text-sapphire bg-canvas text-xs transition"
+                  title="Copy Verification Link"
+                >
+                  {copiedLink ? <CheckCheck className="w-4 h-4 text-sage" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={() => {
+                playTactileClick();
+                onClose();
+              }}
+              className="p-1.5 rounded-lg text-sapphire/50 hover:text-sapphire hover:bg-canvas transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable Content */}
@@ -352,32 +426,66 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
             </div>
           )}
 
-          {/* Cooling-off Window Banner & Appeal Action (Status 7) */}
+          {/* Cooling-off Window Banner & Live Dynamic Block Countdown (Status 7) */}
           {isAuditCompleted && (
             <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2 text-amber-900">
-                  <Clock className="w-4 h-4 text-amber-700" />
+                  <Clock className={`w-4 h-4 ${isSettlementUnlocked ? 'text-sage' : 'text-amber-700 animate-pulse'}`} />
                   <span className="font-bold text-xs uppercase tracking-wider">
-                    30-Block Cooling-off Period Active
+                    {isSettlementUnlocked
+                      ? 'Cooling-Off Window Completed • Escrow Ready For Final Settlement'
+                      : '30-Block Cooling-off Challenge Window Active'}
                   </span>
                 </div>
-                <span className="text-[11px] font-mono font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
-                  Audit Block: {job.audit_completed_block || 'Active'}
-                </span>
+                <div className="flex items-center space-x-2">
+                  {currentBlockNumber > 0 && (
+                    <span className="text-[10px] font-mono font-medium text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
+                      Live Block: #{currentBlockNumber}
+                    </span>
+                  )}
+                  <span className="text-[11px] font-mono font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                    Audit Block: #{job.audit_completed_block || '0'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Real-time Block Progress Bar */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex justify-between text-[11px] font-medium text-amber-900">
+                  <span>
+                    {isSettlementUnlocked
+                      ? '30 of 30 blocks elapsed (100% cooling-off elapsed)'
+                      : `${blocksElapsed} of 30 blocks elapsed (${blocksRemaining} blocks remaining)`}
+                  </span>
+                  <span className="font-mono font-bold text-amber-950">
+                    {isSettlementUnlocked ? 'Unlocked' : `Unlock Block: #${unlockBlock}`}
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-amber-200/80 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-700 rounded-full ${
+                      isSettlementUnlocked ? 'bg-sage' : 'bg-amber-600'
+                    }`}
+                    style={{ width: `${isSettlementUnlocked ? 100 : coolingProgress}%` }}
+                  ></div>
+                </div>
               </div>
 
               <p className="text-xs text-amber-900/80">
                 Pavel & Joaquin Accounting Rule: Funds remain safely in escrow. If undisputed within 30 blocks, anyone can finalize the payout. If contested, either Employer or Candidate can stake a 10% bond to trigger Senior Board review.
               </p>
 
-              {isParticipant && !showAppealForm && (
-                <div className="pt-1 flex items-center justify-between">
+              {isParticipant && !showAppealForm && !isSettlementUnlocked && (
+                <div className="pt-1 flex items-center justify-between border-t border-amber-200/60 mt-2">
                   <span className="text-[11px] text-amber-800">
                     Required Dispute Bond: <strong>{formatGen(requiredBondWei.toString())} GEN (10%)</strong>
                   </span>
                   <button
-                    onClick={() => setShowAppealForm(true)}
+                    onClick={() => {
+                      playTactileClick();
+                      setShowAppealForm(true);
+                    }}
                     className="px-3.5 py-1.5 rounded-lg bg-amber-800 hover:bg-amber-900 text-white text-xs font-semibold transition flex items-center space-x-1"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -583,6 +691,106 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Swiss Certificate of Autonomous Competency Modal */}
+      {showCertificateModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-sapphire/80 backdrop-blur-md animate-fade-in print:p-0 print:bg-white">
+          <div className="bg-[#FAF7F2] w-full max-w-2xl rounded-2xl border-4 border-[#C5A880] p-8 shadow-2xl relative flex flex-col justify-between text-sapphire print:border-none print:shadow-none print:w-full print:max-w-none">
+            {/* Top Bar for Printing & Closing (hidden when printed) */}
+            <div className="flex items-center justify-between pb-6 border-b border-[#C5A880]/30 print:hidden">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-5 h-5 text-[#C5A880]" />
+                <span className="font-display-luxury text-sm font-bold text-sapphire uppercase tracking-wider">
+                  Official Swiss Competency Diploma
+                </span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    playTactileClick();
+                    window.print();
+                  }}
+                  className="px-4 py-2 rounded-lg bg-sapphire hover:bg-sapphire-light text-white text-xs font-bold uppercase tracking-wider flex items-center space-x-1.5 shadow transition"
+                >
+                  <Printer className="w-4 h-4 text-champagne" />
+                  <span>Print / Save PDF</span>
+                </button>
+                <button
+                  onClick={() => {
+                    playTactileClick();
+                    setShowCertificateModal(false);
+                  }}
+                  className="p-2 rounded-lg text-sapphire/50 hover:text-sapphire hover:bg-canvas transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Certificate Body (Classic Helvetic Corporate Style) */}
+            <div className="py-8 space-y-6 text-center">
+              <div className="space-y-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#C5A880] font-bold block">
+                  GENLAYER PROTOCOL • STUDIONET AUTONOMOUS COURT
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-bold font-serif-title tracking-tight text-sapphire">
+                  Certificate of AI Agent Competency
+                </h2>
+                <p className="text-xs text-sapphire/60 italic font-serif">
+                  Awarded under Consensus Deliberation of the Executive AI Hiring Board
+                </p>
+              </div>
+
+              <div className="py-2">
+                <span className="text-xs uppercase tracking-wider text-sapphire/50 block">This is to certify that Autonomous Agent</span>
+                <span className="font-mono text-xs font-bold text-sapphire bg-surface px-4 py-1.5 rounded-full border border-borderline inline-block mt-1 max-w-full break-all">
+                  {job.candidate_agent}
+                </span>
+              </div>
+
+              <div className="p-4 rounded-xl bg-surface border border-[#C5A880]/40 max-w-lg mx-auto shadow-sm space-y-2">
+                <div className="text-xs text-sapphire/70">has been formally audited for Role Mandate:</div>
+                <div className="font-mono text-sm font-bold text-sapphire">{job.job_id}</div>
+                <div className="flex items-center justify-center gap-6 pt-2 border-t border-borderline/60">
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-sapphire/50">Competency Score</span>
+                    <span className="text-xl font-bold font-mono text-sapphire">{job.competency_score} / 100</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-sapphire/50">Jury Consensus</span>
+                    <span className="text-xl font-bold font-mono text-sapphire">{job.confidence}%</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] uppercase font-bold text-sapphire/50">Grade Rating</span>
+                    <span className={`text-xl font-bold font-display-luxury ${competency.color}`}>{competency.grade}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="inline-block px-5 py-2 rounded-lg border-2 border-champagne bg-champagne-soft/50 text-sapphire font-bold tracking-widest text-sm font-serif-title">
+                VERDICT: {job.verdict.replace(/_/g, ' ')}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-left text-[11px] pt-4 border-t border-[#C5A880]/30 text-sapphire/70 font-mono">
+                <div>
+                  <span className="block font-bold text-sapphire">Canary Token Verification:</span>
+                  <span>CANARY_AGENT_TALENT_V1 (Verified)</span>
+                </div>
+                <div className="text-right">
+                  <span className="block font-bold text-sapphire">Audit Finalized Block:</span>
+                  <span>Block #{job.audit_completed_block || 'On-Chain'} (Studionet)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Certificate Seal Footer */}
+            <div className="pt-4 border-t border-[#C5A880]/30 flex items-center justify-between text-[10px] text-sapphire/50 font-mono">
+              <span>Authenticity verifiable on GenLayer Chain 61999</span>
+              <span>Swiss Protocol Modern Edition</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -11,9 +11,12 @@ import {
   Check,
   User,
   ChevronDown,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { shortenAddress } from '../utils/helpers';
 import { STUDIO_URL } from '../config/genlayer';
+import { isSoundEnabled, setSoundEnabled, playTactileClick } from '../utils/audio';
 
 interface NavbarProps {
   account: string;
@@ -40,6 +43,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [copied, setCopied] = useState(false);
   const [customAddress, setCustomAddress] = useState(contractAddress);
+  const [soundOn, setSoundOn] = useState(isSoundEnabled());
+
+  const handleToggleSound = () => {
+    const next = !soundOn;
+    setSoundOn(next);
+    setSoundEnabled(next);
+    if (next) playTactileClick();
+  };
 
   const handleSaveContract = (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,6 +110,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Settings className="w-3.5 h-3.5 text-sapphire/60" />
               <span className="font-mono text-[11px]">{shortenAddress(contractAddress, 4)}</span>
+            </button>
+
+            <button
+              onClick={handleToggleSound}
+              className={`p-1.5 rounded-full border transition-colors ${
+                soundOn
+                  ? 'bg-canvas text-champagne-dark border-champagne/50'
+                  : 'bg-canvas text-sapphire/40 border-borderline'
+              }`}
+              title={soundOn ? 'Audio FX Enabled (Click to Mute)' : 'Audio FX Muted (Click to Enable)'}
+            >
+              {soundOn ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
             </button>
           </div>
 

@@ -78,6 +78,31 @@ export async function fetchStudionetBalance(address: string): Promise<string> {
   return '0.00';
 }
 
+/**
+ * Fetch real on-chain block number from Studionet to calculate live cooling-off countdown
+ */
+export async function fetchCurrentBlockNumber(): Promise<number> {
+  try {
+    const res = await fetch(STUDIONET_RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_blockNumber',
+        params: [],
+        id: Date.now(),
+      }),
+    });
+    const json = await res.json();
+    if (json && json.result) {
+      return parseInt(json.result, 16);
+    }
+  } catch (err) {
+    console.warn('eth_blockNumber error:', err);
+  }
+  return 0;
+}
+
 export interface JobBountyData {
   job_id: string;
   employer: string;

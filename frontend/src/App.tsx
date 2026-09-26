@@ -19,6 +19,7 @@ import {
   appealVerdictOnChain,
   adjudicateAppealOnChain,
   finalizeSettlementOnChain,
+  fetchCurrentBlockNumber,
   JobBountyData,
   ProtocolStats,
 } from './config/genlayer';
@@ -33,6 +34,7 @@ import {
   Bot,
   Scale,
 } from 'lucide-react';
+import { playSuccessChime, playAlertChime } from './utils/audio';
 
 export const App: React.FC = () => {
   // Wallet & Connection
@@ -61,8 +63,16 @@ export const App: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Live Block Height for dynamic cooling-off countdown
+  const [currentBlock, setCurrentBlock] = useState<number>(0);
+
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setTxToast({ message, type });
+    if (type === 'success') {
+      playSuccessChime();
+    } else if (type === 'error') {
+      playAlertChime();
+    }
     setTimeout(() => setTxToast(null), 6000);
   };
 
@@ -323,6 +333,19 @@ export const App: React.FC = () => {
         })
         .catch(() => {});
     }
+
+    // Periodic live block polling for dynamic countdown
+    const updateBlock = () => {
+      fetchCurrentBlockNumber().then((bn) => {
+        if (bn > 0) setCurrentBlock(bn);
+      });
+    };
+    updateBlock();
+    const blockInterval = setInterval(updateBlock, 8000);
+
+    return () => {
+      clearInterval(blockInterval);
+    };
   }, [loadProtocolData]);
 
   // Filtering Logic
@@ -653,6 +676,7 @@ export const App: React.FC = () => {
         onFinalizeSettlement={handleFinalizeSettlement}
         isProcessing={isProcessingTx}
         currentUserAddress={account}
+        currentBlockNumber={currentBlock}
       />
     </div>
   );
