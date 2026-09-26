@@ -8,7 +8,7 @@ export const STUDIONET_RPC_URL = 'https://studio.genlayer.com/api';
 export const STUDIO_URL = 'https://studio.genlayer.com';
 
 // Default contract address (can be updated via UI or localStorage)
-export const DEFAULT_CONTRACT_ADDRESS = '0x2532644fD92172c6EdaA4c72Ff06842778a1643B';
+export const DEFAULT_CONTRACT_ADDRESS = '0x637ba7a7CA3a80C06A280b38432B82e59fd79308';
 
 export function getSavedContractAddress(): string {
   if (typeof window !== 'undefined') {
