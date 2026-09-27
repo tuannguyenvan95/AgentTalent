@@ -13,7 +13,7 @@ import time
 import json
 from genlayer_py import create_client, create_account, studionet
 
-CONTRACT_ADDR = "0x6A3b572364a740Eb7D23B5cFaa4Ba155AD8D50F1"
+CONTRACT_ADDR = "0xCe83f81f8c186fAb8C66d91514b6613dee3c4aFC"
 
 # Employer Account
 EMPLOYER_PK = "0x1b807b1df022a40f872596b11565e6b6856547dc66996bd3d5a85b376ea3a0ef"
