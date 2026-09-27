@@ -36,7 +36,6 @@ interface BoardInspectorModalProps {
   onFinalizeSettlement?: (jobId: string) => Promise<void>;
   isProcessing?: boolean;
   currentUserAddress?: string;
-  currentBlockNumber?: number;
 }
 
 export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
@@ -49,7 +48,6 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   onFinalizeSettlement,
   isProcessing = false,
   currentUserAddress = '',
-  currentBlockNumber: _currentBlockNumber = 0,
 }) => {
   const [showAppealForm, setShowAppealForm] = useState(false);
   const [newEvidenceUrl, setNewEvidenceUrl] = useState('');

@@ -106,7 +106,7 @@ class MockGenLayerEnv:
                 # Appellate court
                 return json.dumps({
                     "canary": "CANARY_AGENT_TALENT_V1",
-                    "verdict": "APPEAL_REJECTED",
+                    "verdict": "APPEAL_DISMISSED",
                     "confidence": 92,
                     "competency_score": 25,
                     "reason": "Appellate review found new evidence insufficient to overturn initial ruling."

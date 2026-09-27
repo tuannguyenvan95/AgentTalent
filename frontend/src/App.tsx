@@ -19,7 +19,6 @@ import {
   appealVerdictOnChain,
   adjudicateAppealOnChain,
   finalizeSettlementOnChain,
-  fetchCurrentBlockNumber,
   JobBountyData,
   ProtocolStats,
 } from './config/genlayer';
@@ -63,8 +62,6 @@ export const App: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Live Block Height for dynamic cooling-off countdown
-  const [currentBlock, setCurrentBlock] = useState<number>(0);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setTxToast({ message, type });
@@ -334,17 +331,13 @@ export const App: React.FC = () => {
         .catch(() => {});
     }
 
-    // Periodic live block polling for dynamic countdown
-    const updateBlock = () => {
-      fetchCurrentBlockNumber().then((bn) => {
-        if (bn > 0) setCurrentBlock(bn);
-      });
-    };
-    updateBlock();
-    const blockInterval = setInterval(updateBlock, 8000);
+    // Automatic refresh interval for protocol data
+    const refreshInterval = setInterval(() => {
+      loadProtocolData();
+    }, 15000);
 
     return () => {
-      clearInterval(blockInterval);
+      clearInterval(refreshInterval);
     };
   }, [loadProtocolData]);
 
@@ -676,7 +669,6 @@ export const App: React.FC = () => {
         onFinalizeSettlement={handleFinalizeSettlement}
         isProcessing={isProcessingTx}
         currentUserAddress={account}
-        currentBlockNumber={currentBlock}
       />
     </div>
   );

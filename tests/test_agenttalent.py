@@ -401,7 +401,7 @@ def test_appeal_rejected_restores_initial_hired_outcome(mock_gl_env):
     # 4. Appellate court rejects appeal
     mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
         "canary": "CANARY_AGENT_TALENT_V1",
-        "verdict": "APPEAL_REJECTED",
+        "verdict": "APPEAL_DISMISSED",
         "confidence": 90,
         "competency_score": 10,
         "reason": "Allegation unproven; candidate code verified original."
@@ -470,7 +470,7 @@ def test_appeal_rejected_restores_initial_shortlisted_outcome(mock_gl_env):
     # 4. Appellate court rejects candidate's appeal
     mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
         "canary": "CANARY_AGENT_TALENT_V1",
-        "verdict": "APPEAL_REJECTED",
+        "verdict": "APPEAL_DISMISSED",
         "confidence": 91,
         "competency_score": 68,
         "reason": "No substantial gas optimizations demonstrated in appeal."
@@ -541,7 +541,7 @@ def test_appeal_rejected_restores_initial_rejected_outcome(mock_gl_env):
     # 4. Appeal rejected
     mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
         "canary": "CANARY_AGENT_TALENT_V1",
-        "verdict": "APPEAL_REJECTED",
+        "verdict": "APPEAL_DISMISSED",
         "confidence": 95,
         "competency_score": 15,
         "reason": "Appeal evidence does not address the required specifications."
@@ -557,3 +557,137 @@ def test_appeal_rejected_restores_initial_rejected_outcome(mock_gl_env):
     assert len(employer_transfers) == 2
     assert employer_transfers[0]["value"] == bond_val    # Slashed bond
     assert employer_transfers[1]["value"] == escrow_val  # 100% refund
+
+
+# =============================================================================
+# TEST 7: Symmetric Employer Appeal Upheld (Fraud proven -> NEW_VERDICT_REJECTED)
+# =============================================================================
+
+def test_employer_appeal_upheld_rejection(mock_gl_env):
+    """
+    Symmetric Appeal Handling:
+    Initial verdict was CANDIDATE_HIRED.
+    Employer appeals with plagiarism proof.
+    Senior Board upholds Employer's appeal -> NEW_VERDICT_REJECTED.
+    Employer won! Receives 100% bounty refund AND dispute bond refund.
+    """
+    setup_gl_mock(mock_gl_env)
+    import contract
+    contract.gl = mock_gl_env
+
+    app = contract.Contract()
+    employer_addr = SimulatedAddress("0xAAAA111122223333444455556666777788889999")
+    candidate_addr = SimulatedAddress("0xBBBB111122223333444455556666777788889999")
+
+    mock_gl_env.message.sender_address = employer_addr
+    escrow_val = 1_000_000_000_000_000_000
+    mock_gl_env.message.value = escrow_val
+    job_id = app.post_job_bounty("Symmetric test job", 86400)
+
+    mock_gl_env.message.sender_address = candidate_addr
+    app.submit_interview_response(job_id, "https://candidate.ai/sol.py")
+
+    # Initial adjudication hired candidate
+    mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
+        "canary": "CANARY_AGENT_TALENT_V1",
+        "verdict": "CANDIDATE_HIRED",
+        "confidence": 95,
+        "competency_score": 88,
+        "reason": "Initial pass."
+    })
+    app.adjudicate_interview(job_id)
+
+    # Employer appeals with fraud proof
+    mock_gl_env.message.sender_address = employer_addr
+    bond_val = 100_000_000_000_000_000
+    mock_gl_env.message.value = bond_val
+    app.appeal_verdict(job_id, "https://employer.ai/fraud_proof.pdf")
+
+    # Senior Board upholds employer's claim: candidate is rejected
+    mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
+        "canary": "CANARY_AGENT_TALENT_V1",
+        "verdict": "NEW_VERDICT_REJECTED",
+        "confidence": 96,
+        "competency_score": 15,
+        "reason": "Plagiarism verified; candidate code stolen."
+    })
+    app.adjudicate_appeal(job_id)
+
+    j_final = json.loads(app.get_job(job_id))
+    assert j_final["status"] == 3  # REJECTED_REFUNDED
+    assert j_final["verdict"] == "CANDIDATE_REJECTED"
+
+    # Employer receives both bond refund AND 100% escrow refund!
+    emp_transfers = mock_gl_env.get_contract_at(employer_addr).transfers
+    assert len(emp_transfers) == 2
+    assert emp_transfers[0]["value"] == bond_val    # Bond returned to winning appellant
+    assert emp_transfers[1]["value"] == escrow_val  # 100% escrow refund to employer
+    # Candidate received nothing
+    cand_transfers = mock_gl_env.get_contract_at(candidate_addr).transfers
+    assert len(cand_transfers) == 0
+
+
+# =============================================================================
+# TEST 8: Candidate Appeal Upheld (Competency proven -> NEW_VERDICT_HIRED)
+# =============================================================================
+
+def test_candidate_appeal_upheld_hired(mock_gl_env):
+    """
+    Symmetric Appeal Handling:
+    Initial verdict was CANDIDATE_REJECTED.
+    Candidate appeals with formal invariant proof.
+    Senior Board upholds Candidate's appeal -> NEW_VERDICT_HIRED.
+    Candidate won! Receives 100% bounty AND dispute bond refund.
+    """
+    setup_gl_mock(mock_gl_env)
+    import contract
+    contract.gl = mock_gl_env
+
+    app = contract.Contract()
+    employer_addr = SimulatedAddress("0xAAAA111122223333444455556666777788889999")
+    candidate_addr = SimulatedAddress("0xBBBB111122223333444455556666777788889999")
+
+    mock_gl_env.message.sender_address = employer_addr
+    escrow_val = 1_000_000_000_000_000_000
+    mock_gl_env.message.value = escrow_val
+    job_id = app.post_job_bounty("Symmetric test job candidate win", 86400)
+
+    mock_gl_env.message.sender_address = candidate_addr
+    app.submit_interview_response(job_id, "https://candidate.ai/sol.py")
+
+    # Initial adjudication rejected candidate
+    mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
+        "canary": "CANARY_AGENT_TALENT_V1",
+        "verdict": "CANDIDATE_REJECTED",
+        "confidence": 85,
+        "competency_score": 40,
+        "reason": "Missing invariant check."
+    })
+    app.adjudicate_interview(job_id)
+
+    # Candidate appeals with invariant proof
+    mock_gl_env.message.sender_address = candidate_addr
+    bond_val = 100_000_000_000_000_000
+    mock_gl_env.message.value = bond_val
+    app.appeal_verdict(job_id, "https://candidate.ai/invariant_proof.py")
+
+    # Senior Board upholds candidate's appeal
+    mock_gl_env.exec_prompt_override = lambda p, rf: json.dumps({
+        "canary": "CANARY_AGENT_TALENT_V1",
+        "verdict": "NEW_VERDICT_HIRED",
+        "confidence": 98,
+        "competency_score": 95,
+        "reason": "Formal invariant proof verified mathematically."
+    })
+    app.adjudicate_appeal(job_id)
+
+    j_final = json.loads(app.get_job(job_id))
+    assert j_final["status"] == 2  # HIRED_PAID
+    assert j_final["verdict"] == "CANDIDATE_HIRED"
+
+    # Candidate receives both bond refund AND 100% escrow bounty!
+    cand_transfers = mock_gl_env.get_contract_at(candidate_addr).transfers
+    assert len(cand_transfers) == 2
+    assert cand_transfers[0]["value"] == bond_val    # Bond returned to winning candidate
+    assert cand_transfers[1]["value"] == escrow_val  # 100% escrow bounty
+
