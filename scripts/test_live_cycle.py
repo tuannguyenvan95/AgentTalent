@@ -13,7 +13,7 @@ import time
 import json
 from genlayer_py import create_client, create_account, studionet
 
-CONTRACT_ADDR = "0x637ba7a7CA3a80C06A280b38432B82e59fd79308"
+CONTRACT_ADDR = "0x6A3b572364a740Eb7D23B5cFaa4Ba155AD8D50F1"
 
 # Employer Account
 EMPLOYER_PK = "0x1b807b1df022a40f872596b11565e6b6856547dc66996bd3d5a85b376ea3a0ef"
@@ -136,11 +136,12 @@ def main():
     print("           EXECUTIVE AI HIRING BOARD DELIBERATION RECORD         ")
     print("=" * 70)
     print(f"Job ID                : {job_final.get('job_id')}")
-    print(f"Status Code           : {job_final.get('status')} (7 = AUDIT_COMPLETED, Cooling-off Active)")
+    print(f"Status Code           : {job_final.get('status')} (7 = AUDIT_COMPLETED, 5-Min Cooling-off Active)")
     print(f"Verdict Rendered      : {job_final.get('verdict')}")
+    print(f"Initial Verdict       : {job_final.get('initial_verdict')}")
     print(f"Competency Score      : {job_final.get('competency_score')} / 100")
     print(f"Confidence Level      : {job_final.get('confidence')}%")
-    print(f"Audit Completed Block : {job_final.get('audit_completed_block')}")
+    print(f"Audit Completed Time  : {job_final.get('audit_completed_time')} (Consensus Epoch)")
     print(f"Candidate Address     : {job_final.get('candidate_agent')}")
     print(f"Bounty Escrow         : {int(job_final.get('bounty_amount', 0)) / 1e18} GEN")
     print("-" * 70)

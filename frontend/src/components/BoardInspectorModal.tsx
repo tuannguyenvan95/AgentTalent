@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Award,
@@ -49,7 +49,7 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   onFinalizeSettlement,
   isProcessing = false,
   currentUserAddress = '',
-  currentBlockNumber = 0,
+  currentBlockNumber: _currentBlockNumber = 0,
 }) => {
   const [showAppealForm, setShowAppealForm] = useState(false);
   const [newEvidenceUrl, setNewEvidenceUrl] = useState('');
@@ -72,13 +72,24 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
   const isCandidate = currentUserAddress && currentUserAddress.toLowerCase() === job.candidate_agent.toLowerCase();
   const isParticipant = isEmployer || isCandidate;
 
-  // Real-time on-chain block calculations
-  const auditCompletedBlock = parseInt(job.audit_completed_block || '0', 10);
-  const unlockBlock = auditCompletedBlock > 0 ? auditCompletedBlock + 30 : 0;
-  const blocksRemaining = currentBlockNumber > 0 && unlockBlock > 0 ? Math.max(0, unlockBlock - currentBlockNumber) : 0;
-  const blocksElapsed = Math.min(30, Math.max(0, 30 - blocksRemaining));
-  const coolingProgress = Math.min(100, Math.round((blocksElapsed / 30) * 100));
-  const isSettlementUnlocked = isAuditCompleted && (blocksRemaining === 0 || (currentBlockNumber === 0 && auditCompletedBlock > 0));
+  // Live seconds ticker for contract-supported lifecycle clock
+  const [currentSeconds, setCurrentSeconds] = useState<number>(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentSeconds(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Contract-supported lifecycle clock (5 minutes / 300 seconds cooling-off)
+  const auditCompletedTime = parseInt(job.audit_completed_time || job.audit_completed_block || '0', 10);
+  const COOLING_OFF_SECONDS = 300;
+  const unlockTime = auditCompletedTime > 0 ? auditCompletedTime + COOLING_OFF_SECONDS : 0;
+  const secondsRemaining = unlockTime > 0 && currentSeconds < unlockTime ? Math.max(0, unlockTime - currentSeconds) : 0;
+  const secondsElapsed = Math.min(COOLING_OFF_SECONDS, Math.max(0, COOLING_OFF_SECONDS - secondsRemaining));
+  const coolingProgress = Math.min(100, Math.round((secondsElapsed / COOLING_OFF_SECONDS) * 100));
+  const isSettlementUnlocked = isAuditCompleted && (secondsRemaining === 0 || auditCompletedTime === 0);
 
   // Calculate required 10% appeal bond in bigint
   const bountyBigInt = BigInt(job.bounty_amount || '0');
@@ -238,7 +249,7 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
                 >
                   {isSettled ? '✓' : '3'}
                 </div>
-                <span className="font-semibold text-sapphire text-[11px]">3. Cooling-off (30 blk)</span>
+                <span className="font-semibold text-sapphire text-[11px]">3. Cooling-off (5 Min)</span>
                 <span className="text-[10px] text-sapphire/50">
                   {job.status === 7 ? 'Challenge Window' : job.status === 6 ? 'In Dispute' : 'Audit Ready'}
                 </span>
@@ -426,7 +437,7 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
             </div>
           )}
 
-          {/* Cooling-off Window Banner & Live Dynamic Block Countdown (Status 7) */}
+          {/* Cooling-off Window Banner & Live Dynamic 5-Minute Lifecycle Clock Countdown (Status 7) */}
           {isAuditCompleted && (
             <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200 space-y-3">
               <div className="flex items-center justify-between">
@@ -435,31 +446,26 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
                   <span className="font-bold text-xs uppercase tracking-wider">
                     {isSettlementUnlocked
                       ? 'Cooling-Off Window Completed • Escrow Ready For Final Settlement'
-                      : '30-Block Cooling-off Challenge Window Active'}
+                      : '5-Minute Cooling-off Challenge Window Active'}
                   </span>
                 </div>
                 <div className="flex items-center space-x-2">
-                  {currentBlockNumber > 0 && (
-                    <span className="text-[10px] font-mono font-medium text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
-                      Live Block: #{currentBlockNumber}
-                    </span>
-                  )}
                   <span className="text-[11px] font-mono font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
-                    Audit Block: #{job.audit_completed_block || '0'}
+                    Audit Time: {job.audit_completed_time ? new Date(parseInt(job.audit_completed_time, 10) * 1000).toLocaleTimeString() : 'On-Chain'}
                   </span>
                 </div>
               </div>
 
-              {/* Real-time Block Progress Bar */}
+              {/* Real-time Lifecycle Clock Progress Bar */}
               <div className="space-y-1.5 pt-1">
                 <div className="flex justify-between text-[11px] font-medium text-amber-900">
                   <span>
                     {isSettlementUnlocked
-                      ? '30 of 30 blocks elapsed (100% cooling-off elapsed)'
-                      : `${blocksElapsed} of 30 blocks elapsed (${blocksRemaining} blocks remaining)`}
+                      ? '300s of 300s elapsed (100% cooling-off elapsed)'
+                      : `${Math.floor(secondsElapsed / 60)}m ${secondsElapsed % 60}s elapsed (${Math.floor(secondsRemaining / 60)}m ${secondsRemaining % 60}s remaining)`}
                   </span>
                   <span className="font-mono font-bold text-amber-950">
-                    {isSettlementUnlocked ? 'Unlocked' : `Unlock Block: #${unlockBlock}`}
+                    {isSettlementUnlocked ? 'Unlocked' : `Unlocks: ${unlockTime > 0 ? new Date(unlockTime * 1000).toLocaleTimeString() : 'Soon'}`}
                   </span>
                 </div>
                 <div className="w-full h-2 rounded-full bg-amber-200/80 overflow-hidden">
@@ -473,7 +479,7 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
               </div>
 
               <p className="text-xs text-amber-900/80">
-                Pavel & Joaquin Accounting Rule: Funds remain safely in escrow. If undisputed within 30 blocks, anyone can finalize the payout. If contested, either Employer or Candidate can stake a 10% bond to trigger Senior Board review.
+                Steward Accounting Rule: Escrow funds remain safely locked. If undisputed within the 5-minute cooling-off window (300 seconds), either party can finalize the payout. If contested, either Employer or Candidate can deposit a 10% bond to trigger Senior Board review.
               </p>
 
               {isParticipant && !showAppealForm && !isSettlementUnlocked && (
@@ -640,16 +646,34 @@ export const BoardInspectorModal: React.FC<BoardInspectorModalProps> = ({
                   : 'Awaiting submission'}
               </div>
               {job.interview_response_url && (
-                <div className="pt-2">
+                <div className="pt-2 space-y-1.5">
                   <a
                     href={job.interview_response_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center space-x-1.5 text-xs font-semibold text-sapphire hover:text-champagne-dark transition underline underline-offset-2 break-all"
                   >
-                    <span>View Live Solution Endpoint</span>
+                    <span>View Candidate Solution (Preserved)</span>
                     <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                   </a>
+                  {job.appeal_evidence_url && (
+                    <div>
+                      <a
+                        href={job.appeal_evidence_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center space-x-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900 transition underline underline-offset-2 break-all"
+                      >
+                        <span>View Appellate Evidence</span>
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                      </a>
+                    </div>
+                  )}
+                  {job.initial_verdict && job.initial_verdict !== 'PENDING' && (
+                    <div className="text-[10px] font-mono text-sapphire/60">
+                      Initial Ruling: <strong className="text-sapphire">{job.initial_verdict.replace(/_/g, ' ')}</strong>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -3,8 +3,14 @@ from genlayer import *
 from dataclasses import dataclass
 import json
 
+if not hasattr(gl, "UserError"):
+    gl.UserError = getattr(gl.vm, "UserError", Exception)
+
 CANARY_TOKEN = "CANARY_AGENT_TALENT_V1"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+COOLING_OFF_SECONDS = u256(300)       # 5 minutes challenge / cooling-off window (manipulation-resistant)
+DEFAULT_JOB_DURATION = u256(86400)    # 24 hours default listing duration
+STALL_TIMEOUT_SECONDS = u256(3600)    # 1 hour maximum interview deliberation before employer can reclaim
 
 
 def _addr_str(addr: Address) -> str:
@@ -13,6 +19,29 @@ def _addr_str(addr: Address) -> str:
         return addr.as_hex
     except Exception:
         return str(addr)
+
+
+def _current_timestamp() -> u256:
+    """
+    Derives manipulation-resistant execution timestamp from consensus block context (gl.message_raw['datetime']).
+    Safely parses UTC ISO string including 'Z' suffix across all Python runtime versions.
+    """
+    import calendar
+    from datetime import datetime, timezone
+    try:
+        if hasattr(gl, "message_raw") and isinstance(gl.message_raw, dict):
+            raw_val = gl.message_raw.get("datetime", "")
+            if raw_val:
+                dt_str = str(raw_val).strip().replace("Z", "+00:00")
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                ts = calendar.timegm(dt.utctimetuple())
+                if ts > 0:
+                    return u256(ts)
+    except Exception:
+        pass
+    raise gl.UserError("Trusted execution timestamp unavailable from runtime context.")
 
 
 @allow_storage
@@ -26,16 +55,19 @@ class JobBounty:
     bounty_amount: bigint
     dispute_bond: bigint          # Staked bond by appellant to prevent frivolous appeals
     job_description: str          # Job role, domain requirements, interview case study
-    interview_response_url: str   # Live URL of candidate's detailed solution / interview logs
+    interview_response_url: str   # Candidate's original interview response URL (strictly preserved)
+    appeal_evidence_url: str      # Appellant's new appeal evidence URL (preserved separately)
     status: u8                    # 0: OPEN, 1: IN_INTERVIEW, 2: HIRED_PAID, 3: REJECTED_REFUNDED, 4: SHORTLISTED_PARTIAL, 5: CANCELLED, 6: DISPUTED, 7: AUDIT_COMPLETED
-    verdict: str                  # "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED", "DISPUTED", "CANCELLED"
-    reason: str                    # Detailed interview panel rationale
+    verdict: str                  # Current verdict: "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED", "DISPUTED", "CANCELLED"
+    initial_verdict: str          # Preserved initial verdict across any appeal outcome
+    initial_status: u8            # Preserved initial status
+    reason: str                   # Detailed interview panel rationale
     confidence: u8                # 0 - 100: Validator consensus confidence
     competency_score: u8          # 0 - 100: Technical & strategic competency assessment
-    created_at_block: u256
-    expires_at_block: u256
-    interview_started_block: u256
-    audit_completed_block: u256
+    created_at_time: u256         # Deterministic creation timestamp from consensus
+    expires_at_time: u256         # Deterministic expiration timestamp
+    interview_started_time: u256  # Interview started timestamp
+    audit_completed_time: u256    # Initial audit completed timestamp (cooling window baseline)
 
 
 class Contract(gl.Contract):
@@ -56,7 +88,7 @@ class Contract(gl.Contract):
         self.job_counter = u64(0)
 
     @gl.public.write.payable
-    def post_job_bounty(self, job_description: str, duration_blocks: int) -> str:
+    def post_job_bounty(self, job_description: str, duration_seconds: int = 86400) -> str:
         """
         Employer deposits GEN interview bounty and publishes hiring requirements & case study.
         """
@@ -68,12 +100,12 @@ class Contract(gl.Contract):
         if not clean_desc or len(clean_desc) < 15:
             raise gl.UserError("Job specification and case study scenario must be at least 15 characters.")
 
-        duration = u256(duration_blocks if duration_blocks > 0 else 5000)
+        dur = u256(duration_seconds if duration_seconds > 0 else 86400)
 
         self.job_counter = self.job_counter + u64(1)
         job_id = f"talent-{int(self.job_counter)}"
-        current_block = u256(int(self.job_counter))
-        expires_at = current_block + duration
+        current_time = _current_timestamp()
+        expires_at = current_time + dur if current_time > 0 else DEFAULT_JOB_DURATION
         empty_address = Address(ZERO_ADDRESS)
 
         new_job = JobBounty(
@@ -85,15 +117,18 @@ class Contract(gl.Contract):
             dispute_bond=bigint(0),
             job_description=clean_desc,
             interview_response_url="",
+            appeal_evidence_url="",
             status=u8(0),  # OPEN
             verdict="PENDING",
+            initial_verdict="PENDING",
+            initial_status=u8(0),
             reason="Role open. Awaiting AI agent candidate interview submission.",
             confidence=u8(0),
             competency_score=u8(0),
-            created_at_block=current_block,
-            expires_at_block=expires_at,
-            interview_started_block=u256(0),
-            audit_completed_block=u256(0),
+            created_at_time=current_time,
+            expires_at_time=expires_at,
+            interview_started_time=u256(0),
+            audit_completed_time=u256(0),
         )
 
         self.jobs[job_id] = new_job
@@ -117,22 +152,26 @@ class Contract(gl.Contract):
         if gl.message.sender_address == j.employer:
             raise gl.UserError("Employer cannot apply as candidate for their own job post.")
 
+        current_time = _current_timestamp()
+        if current_time > 0 and j.expires_at_time > 0 and current_time > j.expires_at_time:
+            raise gl.UserError("Cannot submit interview response: Job listing duration has expired.")
+
         clean_url = str(interview_response_url).strip()
         if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
             raise gl.UserError("Valid public interview solution URL (http/https) is required.")
 
-        self.job_counter = self.job_counter + u64(1)
         j.candidate_agent = gl.message.sender_address
         j.interview_response_url = clean_url
         j.status = u8(1)  # IN_INTERVIEW
-        j.interview_started_block = u256(int(self.job_counter))
+        j.interview_started_time = current_time
         j.reason = "Interview response submitted. Executive AI Hiring Board convening for evaluation."
 
     @gl.public.write
     def adjudicate_interview(self, job_id: str) -> None:
         """
         AI Jury evaluates candidate response, records score and initial verdict.
-        Transitions to AUDIT_COMPLETED (status 7) opening a 30-block challenge window.
+        Transitions to AUDIT_COMPLETED (status 7) opening a 5-minute cooling-off window.
+        Strictly preserves the initial verdict and initial status.
         """
         if job_id not in self.jobs:
             raise gl.UserError(f"Job {job_id} does not exist.")
@@ -263,6 +302,7 @@ Respond ONLY with valid JSON without markdown fences:
                 return False
 
             mine = leader_fn()
+            # Semantic Consensus: Validators agree on the final legal verdict
             return mine["verdict"] == leader["verdict"]
 
         adjudication_res = gl.vm.run_nondet(leader_fn, validator_fn)
@@ -272,21 +312,23 @@ Respond ONLY with valid JSON without markdown fences:
         confidence = u8(int(adjudication_res["confidence"]))
         competency_score = u8(int(adjudication_res["competency_score"]))
 
-        self.job_counter = self.job_counter + u64(1)
-        current_block = u256(int(self.job_counter))
+        current_time = _current_timestamp()
 
         j.verdict = verdict
         j.reason = reason
         j.confidence = confidence
         j.competency_score = competency_score
-        j.status = u8(7)  # AUDIT_COMPLETED (30-block cooling-off window begins)
-        j.audit_completed_block = current_block
+        j.status = u8(7)  # AUDIT_COMPLETED (5-minute cooling-off window begins)
+        j.initial_verdict = verdict
+        j.initial_status = u8(7)
+        j.audit_completed_time = current_time
 
     @gl.public.write.payable
     def appeal_verdict(self, job_id: str, new_evidence_url: str) -> None:
         """
-        Contests the initial interview verdict within 30 blocks cooling-off window.
+        Contests the initial interview verdict within the 5-minute cooling-off window.
         Appellant MUST stake a 10% dispute bond to prevent frivolous griefing.
+        Preserves candidate's original interview response URL while storing new appeal evidence URL separately.
         """
         if job_id not in self.jobs:
             raise gl.UserError(f"Job {job_id} does not exist.")
@@ -299,11 +341,9 @@ Respond ONLY with valid JSON without markdown fences:
         if sender != j.employer and sender != j.candidate_agent:
             raise gl.UserError("Only Employer or Candidate can file an appeal.")
 
-        self.job_counter = self.job_counter + u64(1)
-        current_block = u256(int(self.job_counter))
-
-        if current_block > (j.audit_completed_block + u256(30)):
-            raise gl.UserError("Appeal challenge window has expired. Eligible for settlement.")
+        current_time = _current_timestamp()
+        if current_time > 0 and j.audit_completed_time > 0 and current_time > (j.audit_completed_time + COOLING_OFF_SECONDS):
+            raise gl.UserError("Appeal challenge window (5 minutes) has expired. Eligible for settlement.")
 
         required_bond = (j.bounty_amount * bigint(10)) // bigint(100)
         if required_bond == bigint(0):
@@ -320,9 +360,10 @@ Respond ONLY with valid JSON without markdown fences:
         j.status = u8(6)  # DISPUTED
         j.dispute_initiator = sender
         j.dispute_bond = staked_bond
-        j.interview_response_url = clean_url
+        # Preserve original candidate solution URL, store new appeal proof separately
+        j.appeal_evidence_url = clean_url
         j.verdict = "DISPUTED"
-        j.reason = f"Initial verdict appealed by {'Employer' if sender == j.employer else 'Candidate'}. Senior Board reviewing."
+        j.reason = f"Initial verdict ({j.initial_verdict}) appealed by {'Employer' if sender == j.employer else 'Candidate'}. Senior Board reviewing."
 
         # Strictly track deposited bond into locked pool
         self.total_talent_locked = self.total_talent_locked + staked_bond
@@ -331,6 +372,8 @@ Respond ONLY with valid JSON without markdown fences:
     def adjudicate_appeal(self, job_id: str) -> None:
         """
         Senior Executive Board reviews appealed interview solution and delivers final settlement.
+        Properly preserves initial verdict across rejected appeals and routes the bond
+        to the winning party instead of inferring settlement from the appellant identity.
         """
         if job_id not in self.jobs:
             raise gl.UserError(f"Job {job_id} does not exist.")
@@ -339,9 +382,10 @@ Respond ONLY with valid JSON without markdown fences:
         if j.status != u8(6):
             raise gl.UserError("Job is not in active dispute.")
 
-        response_url = j.interview_response_url
+        response_url = j.appeal_evidence_url if j.appeal_evidence_url else j.interview_response_url
         job_reqs = j.job_description
         appellant = j.dispute_initiator
+        initial_verdict = j.initial_verdict
 
         def leader_fn():
             raw_solution = ""
@@ -371,6 +415,12 @@ EMPLOYER REQUIREMENTS:
 {job_reqs}
 </spec>
 
+INITIAL VERDICT UNDER REVIEW:
+{initial_verdict}
+
+APPELLANT:
+{"Candidate" if appellant == j.candidate_agent else "Employer"}
+
 NEW APPEAL EVIDENCE:
 <interview_solution>
 {truncated_solution}
@@ -380,7 +430,8 @@ EVALUATION CRITERIA:
 1. Is the appeal justified? Does new evidence prove genuine technical competency solving the case study?
 2. If fully verified solution (score >= 80): Output "APPEAL_UPHELD_HIRED".
 3. If partial compliance (score 55-79): Output "APPEAL_UPHELD_SHORTLISTED".
-4. Otherwise (unqualified/spam/plagiarized): Output "APPEAL_REJECTED".
+4. If candidate is proven unqualified, or appeal claim is unfounded: Output "APPEAL_REJECTED".
+   (Note: If appeal is rejected, the initial verdict {initial_verdict} will be restored).
 
 SECURITY CANARY:
 Include "canary": "{CANARY_TOKEN}" in your JSON response.
@@ -461,49 +512,58 @@ Respond ONLY with valid JSON:
         self.total_talent_locked = self.total_talent_locked - total_settling
         self.total_hires_completed = self.total_hires_completed + u32(1)
 
-        if app_verdict == "APPEAL_UPHELD_HIRED":
-            j.status = u8(2)  # HIRED_PAID
-            j.verdict = "CANDIDATE_HIRED"
-            j.reason = reason
-            gl.get_contract_at(j.candidate_agent).emit_transfer(value=u256(escrow_val))
-            # If Candidate appealed and won: return their bond. If Employer appealed and lost: slash to Candidate
-            bond_target = j.candidate_agent
-            gl.get_contract_at(bond_target).emit_transfer(value=u256(bond_val))
+        appellee = j.employer if appellant == j.candidate_agent else j.candidate_agent
 
+        # Determine winner/loser to distribute bond correctly
+        appellant_won = False
+        final_verdict = j.initial_verdict
+
+        if app_verdict == "APPEAL_UPHELD_HIRED":
+            final_verdict = "CANDIDATE_HIRED"
+            # Candidate wanted HIRED
+            appellant_won = (appellant == j.candidate_agent)
         elif app_verdict == "APPEAL_UPHELD_SHORTLISTED":
+            final_verdict = "CANDIDATE_SHORTLISTED"
+            # If initial was already SHORTLISTED, nothing changed -> appellant lost
+            if j.initial_verdict == "CANDIDATE_SHORTLISTED":
+                appellant_won = False
+            else:
+                appellant_won = True
+        else:
+            # APPEAL_REJECTED: Restore initial ruling instead of inferring settlement from appellant!
+            final_verdict = j.initial_verdict
+            appellant_won = False
+
+        # Distribute Dispute Bond: Winner receives bond (refunded if appellant won, or forfeit prize to appellee)
+        if appellant_won:
+            gl.get_contract_at(appellant).emit_transfer(value=u256(bond_val))
+        else:
+            gl.get_contract_at(appellee).emit_transfer(value=u256(bond_val))
+
+        # Distribute Escrow according to final_verdict
+        j.verdict = final_verdict
+        j.reason = f"{'Appeal upheld' if appellant_won else 'Appeal dismissed, initial ruling restored'}. {reason}"
+
+        if final_verdict == "CANDIDATE_HIRED":
+            j.status = u8(2)  # HIRED_PAID
+            gl.get_contract_at(j.candidate_agent).emit_transfer(value=u256(escrow_val))
+        elif final_verdict == "CANDIDATE_SHORTLISTED":
             j.status = u8(4)  # SHORTLISTED_PARTIAL
-            j.verdict = "CANDIDATE_SHORTLISTED"
-            j.reason = reason
             half_bounty = escrow_val // bigint(2)
             employer_refund = escrow_val - half_bounty
             if half_bounty > bigint(0):
                 gl.get_contract_at(j.candidate_agent).emit_transfer(value=u256(half_bounty))
             if employer_refund > bigint(0):
                 gl.get_contract_at(j.employer).emit_transfer(value=u256(employer_refund))
-            # Return bond to the appellant on compromise
-            gl.get_contract_at(appellant).emit_transfer(value=u256(bond_val))
-
         else:
-            # Appeal rejected
-            if appellant == j.candidate_agent:
-                # Candidate appealed and lost: confirmed rejected
-                j.status = u8(3)  # REJECTED_REFUNDED
-                j.verdict = "CANDIDATE_REJECTED"
-                j.reason = f"Candidate appeal dismissed. {reason}"
-                gl.get_contract_at(j.employer).emit_transfer(value=u256(escrow_val))
-                gl.get_contract_at(j.employer).emit_transfer(value=u256(bond_val))
-            else:
-                # Employer appealed and lost: candidate hire stands
-                j.status = u8(2)  # HIRED_PAID
-                j.verdict = "CANDIDATE_HIRED"
-                j.reason = f"Employer appeal dismissed. {reason}"
-                gl.get_contract_at(j.candidate_agent).emit_transfer(value=u256(escrow_val))
-                gl.get_contract_at(j.candidate_agent).emit_transfer(value=u256(bond_val))
+            # CANDIDATE_REJECTED
+            j.status = u8(3)  # REJECTED_REFUNDED
+            gl.get_contract_at(j.employer).emit_transfer(value=u256(escrow_val))
 
     @gl.public.write
     def finalize_settlement(self, job_id: str) -> None:
         """
-        Executes non-contested payout strictly AFTER the 30 blocks appeal cooling-off window.
+        Executes non-contested payout strictly AFTER the 5-minute appeal cooling-off window.
         Neither party can bypass the challenge window prematurely.
         """
         if job_id not in self.jobs:
@@ -513,11 +573,11 @@ Respond ONLY with valid JSON:
         if j.status != u8(7):
             raise gl.UserError(f"Job {job_id} is not awaiting final settlement.")
 
-        self.job_counter = self.job_counter + u64(1)
-        current_block = u256(int(self.job_counter))
+        current_time = _current_timestamp()
 
-        if current_block <= (j.audit_completed_block + u256(30)):
-            raise gl.UserError("Appeal cooling-off window (30 blocks) is still active.")
+        # Enforced strictly for BOTH parties: cooling-off window cannot be bypassed
+        if current_time > 0 and j.audit_completed_time > 0 and current_time <= (j.audit_completed_time + COOLING_OFF_SECONDS):
+            raise gl.UserError("Appeal cooling-off window (5 minutes) is still active.")
 
         escrow_val = j.bounty_amount
         self.total_talent_locked = self.total_talent_locked - escrow_val
@@ -550,14 +610,13 @@ Respond ONLY with valid JSON:
         if gl.message.sender_address != j.employer:
             raise gl.UserError("Only the employer can cancel or reclaim bounty.")
 
-        self.job_counter = self.job_counter + u64(1)
-        current_block = u256(int(self.job_counter))
+        current_time = _current_timestamp()
 
         if j.status == u8(1):
-            if current_block < (j.interview_started_block + u256(50)):
+            if current_time > 0 and j.interview_started_time > 0 and current_time < (j.interview_started_time + STALL_TIMEOUT_SECONDS):
                 raise gl.UserError("Cannot reclaim: Interview is under active evaluation by the hiring board.")
         elif j.status == u8(0):
-            if current_block < j.expires_at_block:
+            if current_time > 0 and j.expires_at_time > 0 and current_time < j.expires_at_time:
                 raise gl.UserError("Cannot cancel: Job listing duration has not yet expired.")
         else:
             raise gl.UserError("Job bounty is already settled or reclaimed.")
@@ -589,15 +648,23 @@ Respond ONLY with valid JSON:
             "dispute_bond": str(j.dispute_bond),
             "job_description": j.job_description,
             "interview_response_url": j.interview_response_url,
+            "appeal_evidence_url": j.appeal_evidence_url,
             "status": int(j.status),
             "verdict": j.verdict,
+            "initial_verdict": j.initial_verdict,
+            "initial_status": int(j.initial_status),
             "reason": j.reason,
             "confidence": int(j.confidence),
             "competency_score": int(j.competency_score),
-            "created_at_block": str(j.created_at_block),
-            "expires_at_block": str(j.expires_at_block),
-            "interview_started_block": str(j.interview_started_block),
-            "audit_completed_block": str(j.audit_completed_block),
+            "created_at_time": str(j.created_at_time),
+            "expires_at_time": str(j.expires_at_time),
+            "interview_started_time": str(j.interview_started_time),
+            "audit_completed_time": str(j.audit_completed_time),
+            # Aliases for backward compatibility
+            "created_at_block": str(j.created_at_time),
+            "expires_at_block": str(j.expires_at_time),
+            "interview_started_block": str(j.interview_started_time),
+            "audit_completed_block": str(j.audit_completed_time),
         }
         return json.dumps(data)
 
@@ -631,15 +698,22 @@ Respond ONLY with valid JSON:
                 "dispute_bond": str(j.dispute_bond),
                 "job_description": j.job_description,
                 "interview_response_url": j.interview_response_url,
+                "appeal_evidence_url": j.appeal_evidence_url,
                 "status": int(j.status),
                 "verdict": j.verdict,
+                "initial_verdict": j.initial_verdict,
+                "initial_status": int(j.initial_status),
                 "reason": j.reason,
                 "confidence": int(j.confidence),
                 "competency_score": int(j.competency_score),
-                "created_at_block": str(j.created_at_block),
-                "expires_at_block": str(j.expires_at_block),
-                "interview_started_block": str(j.interview_started_block),
-                "audit_completed_block": str(j.audit_completed_block),
+                "created_at_time": str(j.created_at_time),
+                "expires_at_time": str(j.expires_at_time),
+                "interview_started_time": str(j.interview_started_time),
+                "audit_completed_time": str(j.audit_completed_time),
+                "created_at_block": str(j.created_at_time),
+                "expires_at_block": str(j.expires_at_time),
+                "interview_started_block": str(j.interview_started_time),
+                "audit_completed_block": str(j.audit_completed_time),
             })
         return json.dumps(jobs_list)
 
@@ -659,15 +733,22 @@ Respond ONLY with valid JSON:
                     "dispute_bond": str(j.dispute_bond),
                     "job_description": j.job_description,
                     "interview_response_url": j.interview_response_url,
+                    "appeal_evidence_url": j.appeal_evidence_url,
                     "status": int(j.status),
                     "verdict": j.verdict,
+                    "initial_verdict": j.initial_verdict,
+                    "initial_status": int(j.initial_status),
                     "reason": j.reason,
                     "confidence": int(j.confidence),
                     "competency_score": int(j.competency_score),
-                    "created_at_block": str(j.created_at_block),
-                    "expires_at_block": str(j.expires_at_block),
-                    "interview_started_block": str(j.interview_started_block),
-                    "audit_completed_block": str(j.audit_completed_block),
+                    "created_at_time": str(j.created_at_time),
+                    "expires_at_time": str(j.expires_at_time),
+                    "interview_started_time": str(j.interview_started_time),
+                    "audit_completed_time": str(j.audit_completed_time),
+                    "created_at_block": str(j.created_at_time),
+                    "expires_at_block": str(j.expires_at_time),
+                    "interview_started_block": str(j.interview_started_time),
+                    "audit_completed_block": str(j.audit_completed_time),
                 })
         return json.dumps(jobs_list)
 

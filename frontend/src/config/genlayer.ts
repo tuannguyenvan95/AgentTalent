@@ -8,7 +8,7 @@ export const STUDIONET_RPC_URL = 'https://studio.genlayer.com/api';
 export const STUDIO_URL = 'https://studio.genlayer.com';
 
 // Default contract address (can be updated via UI or localStorage)
-export const DEFAULT_CONTRACT_ADDRESS = '0x637ba7a7CA3a80C06A280b38432B82e59fd79308';
+export const DEFAULT_CONTRACT_ADDRESS = '0x6A3b572364a740Eb7D23B5cFaa4Ba155AD8D50F1';
 
 export function getSavedContractAddress(): string {
   if (typeof window !== 'undefined') {
@@ -112,11 +112,18 @@ export interface JobBountyData {
   dispute_bond: string;
   job_description: string;
   interview_response_url: string;
+  appeal_evidence_url?: string;
   status: number; // 0: OPEN, 1: IN_INTERVIEW, 2: HIRED_PAID, 3: REJECTED_REFUNDED, 4: SHORTLISTED_PARTIAL, 5: CANCELLED, 6: DISPUTED, 7: AUDIT_COMPLETED
   verdict: string; // "PENDING", "CANDIDATE_HIRED", "CANDIDATE_SHORTLISTED", "CANDIDATE_REJECTED", "DISPUTED", "CANCELLED"
+  initial_verdict?: string;
+  initial_status?: number;
   reason: string;
   confidence: number;
   competency_score: number;
+  created_at_time?: string;
+  expires_at_time?: string;
+  interview_started_time?: string;
+  audit_completed_time?: string;
   created_at_block?: string;
   expires_at_block?: string;
   interview_started_block?: string;

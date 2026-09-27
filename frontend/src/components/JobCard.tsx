@@ -104,7 +104,7 @@ export const JobCard: React.FC<JobCardProps> = ({
           <div className="flex items-center space-x-2">
             <Clock className="w-3.5 h-3.5 text-amber-700 animate-pulse" />
             <div className="flex flex-col">
-              <span className="font-semibold text-[11px]">Audit Done • Cooling-Off (30 Blk)</span>
+              <span className="font-semibold text-[11px]">Audit Done • Cooling-Off (5 Min)</span>
               <span className="text-[10px] text-amber-800/80">Score: {job.competency_score}/100 • Verdict: {job.verdict.replace(/_/g, ' ')}</span>
             </div>
           </div>
